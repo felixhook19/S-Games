@@ -1,57 +1,107 @@
 # 🦄 Unicorn Magic
 
-A gentle, colourful learning game for a 3-year-old who loves unicorns — no
-reading required. It runs **100% offline** in a phone's web browser. There is
-nothing to install, no accounts, and it never touches the internet.
+A gentle, colourful learning game for a 3-year-old who loves unicorns — **no
+reading required**. Everything is spoken aloud and shown with pictures. It runs
+**100% offline**: no internet, no accounts, no ads, and the Android app asks for
+**zero permissions**.
 
-## What's in it
+There are two ways to play, from the *same* game:
 
-Tap a coloured bubble on the home screen to pick a game. Every game is endless
-and you can't lose — just lots of sparkles, happy chimes, and a spoken voice
-that praises her. A little house button (top-left) always goes back home.
+1. **The app (recommended for her):** install `unicorn-magic.apk` — a real
+   home-screen icon that opens full-screen.
+2. **A single web page:** open `unicorn-magic.html` in a browser. Handy for a
+   quick try on any phone, tablet or computer.
 
-| Game | What she learns |
-|------|-----------------|
-| ⭐ **Counting Stars** | Numbers 1–10. Tap each star; the voice counts them aloud. The number of stars grows each round. |
-| 🌈 **Colour the Unicorn** | Colour names. Tap a paint blob to paint the unicorn's mane; the voice says the colour. |
-| 🔵 **Shape Bubbles** | Shapes — circle, square, triangle, star, heart. Pop the floating bubbles; the voice names each shape. |
-| 🎵 **Rainbow Music** | Cause & effect + a happy musical scale. Tap the rainbow bars (every note sounds nice together). |
+---
 
-Designed for the car: big tap targets, no tiny buttons, no menus to read, and
-calm pacing.
+## The games
 
-## How to get it onto the (offline) Pixel 6 Pro
+On the home screen, tap a coloured bubble to pick a game. Every game is
+**endless and impossible to lose** — just sparkles, happy chimes, and a friendly
+voice that names things and praises her. The little **house button (top-left)**
+always goes back home. Turn the volume up!
 
-You only need to copy **one file** — `unicorn-magic.html` — onto the phone.
-Easiest options:
+| Bubble | Game | What she learns |
+|--------|------|-----------------|
+| ⭐ | **Counting Stars** | Numbers 1–10 — tap each star, the voice counts; the count grows each round. |
+| 🌈 | **Colour the Unicorn** | Colour names — tap paint blobs to colour the unicorn's mane. |
+| 🔵 | **Shape Bubbles** | Shapes — pop floating bubbles (circle, square, triangle, star, heart). |
+| 🎵 | **Rainbow Music** | Cause & effect + a happy musical scale (every note sounds nice together). |
+| 🐱 | **Animals & Sounds** | Animals — tap one to hear its name and the sound it makes. |
+| 🔤 | **Letters (ABC)** | Letters — pop a letter to hear it and a word ("U is for Unicorn!"). |
+| 🧩 | **Simple Jigsaw** | Matching & spatial skills — drag the big shapes into their homes. |
+| 🔍 | **Find the Colour** | Listening + colours — the voice asks her to find a colour; she taps it. |
 
-1. **USB cable (no internet needed):** Plug the Pixel into a computer, allow
-   "File transfer" on the phone, and copy `unicorn-magic.html` into the
-   `Download` folder.
-2. **Email / cloud:** While the phone *does* briefly have a connection, email
-   the file to yourself or drop it in Google Drive, then open/download it on
-   the Pixel. After that it works fully offline forever.
+Designed for the car: big tap targets, no tiny buttons, no menus to read, calm
+pacing, and it works in any orientation.
 
-### Open it and make it feel like an app
+---
 
-1. On the Pixel, open **Chrome** and go to `file:///sdcard/Download/unicorn-magic.html`
-   — or just open the file from the **Files** app and choose Chrome.
-2. Tap the **⋮ menu → "Add to Home screen"**. Now there's a Unicorn Magic icon
-   on the home screen that opens full-screen, just like a real app.
-3. Tap the unicorn to start (the first tap is what lets the sound play).
+## Getting the app onto the (offline) Pixel 6 Pro
 
-### Tips
-- Turn the volume up — the counting/colour/shape words are spoken aloud.
-- If you'd like it to never dim, set the screen timeout longer, or keep it
-  charging in the car.
-- The spoken voice uses Android's built-in text-to-speech. If you ever hear no
-  voice, open Android **Settings → Accessibility → Text-to-speech** once while
-  online so the English voice data is downloaded; after that it's offline too.
-  (The chimes and sparkle sounds always work, voice or not.)
+You only need **one file: `unicorn-magic.apk`**.
+
+### 1. Get the APK
+The APK is built automatically by GitHub Actions (the phone never needs to build
+anything). To download it:
+
+- Go to the repository's **Releases** page and download **`unicorn-magic.apk`**
+  from the *"Unicorn Magic (latest APK)"* release, **or**
+- Open the **Actions** tab → the latest *"Build Unicorn Magic APK"* run →
+  download the **`unicorn-magic-apk`** artifact (it's a zip containing the apk).
+
+> The build runs on a push to the game branch, or you can start it manually:
+> **Actions → Build Unicorn Magic APK → Run workflow**.
+
+### 2. Put it on the phone (no internet needed once you have the file)
+- **USB cable:** plug the Pixel into a computer, allow "File transfer", and copy
+  `unicorn-magic.apk` into the phone's `Download` folder, **or**
+- Email it to yourself / drop it in Drive while briefly online, then download it
+  on the Pixel once.
+
+### 3. Install it
+1. On the Pixel, open the **Files** app and tap `unicorn-magic.apk`.
+2. The first time, Android will ask to allow **"Install unknown apps"** for
+   Files/Chrome — turn it on, then tap **Install**. (This is normal for apps
+   that don't come from the Play Store.)
+3. Open **Unicorn Magic** from the home screen. Tap the unicorn to start.
+
+The app keeps the screen awake, hides the status/navigation bars, and works
+entirely offline forever.
+
+### A note on the voice
+The spoken words use the Pixel's built-in **Text-to-Speech**, which works
+offline. If you ever hear chimes but no words, open Android **Settings →
+Accessibility → Text-to-speech** once while online so the English voice data is
+downloaded; after that it's offline too. (The sparkle/chime sounds always work
+regardless.)
+
+---
 
 ## For developers
 
-Everything lives in the single file `unicorn-magic.html`: all graphics are
-drawn with the Canvas API (no image files), sounds are synthesised with the Web
-Audio API, and words use the Web Speech API. No build step, no dependencies.
-Open the file in any modern browser to run it.
+### Web version
+`unicorn-magic.html` is the entire game in one file — all graphics drawn with the
+Canvas API (no image assets), sounds synthesised with the Web Audio API, and
+words spoken via the Web Speech API. No build step, no dependencies. Just open it.
+
+### Android app
+The `android/` folder is a minimal native wrapper: a single full-screen
+`WebView` that loads the game from assets, plus a tiny `TextToSpeech` bridge
+(`window.AndroidTTS`) because a bare WebView has no working Web Speech API. There
+is **no INTERNET permission** — the app cannot touch the network.
+
+`unicorn-magic.html` is the single source of truth; a Gradle `copyGame` task
+copies it into the app's assets at build time, so you only ever edit the one HTML
+file.
+
+Build locally (needs the Android SDK + JDK 17):
+
+```bash
+cd android
+./gradlew assembleDebug
+# -> app/build/outputs/apk/debug/app-debug.apk
+```
+
+Or just push to the game branch and let `.github/workflows/android.yml` build and
+publish the APK for you.

@@ -146,9 +146,17 @@ const Speech = (function () {
          || vs[0];
   }
   if (ok) { pick(); window.speechSynthesis.onvoiceschanged = pick; }
+  // When wrapped in the Android app, a native TextToSpeech bridge is injected
+  // as window.AndroidTTS (a bare WebView has no working speechSynthesis).
+  function bridge() {
+    return (typeof window.AndroidTTS !== 'undefined' && window.AndroidTTS && window.AndroidTTS.speak)
+      ? window.AndroidTTS : null;
+  }
   return {
-    ok,
+    get ok() { return ok || !!bridge(); },
     say(text) {
+      const b = bridge();
+      if (b) { try { b.speak(text); } catch (e) {} return; }
       if (!ok) return;
       try {
         window.speechSynthesis.cancel();
@@ -226,6 +234,17 @@ const COLOR_WORDS = {
   '#7bd66b': 'green', '#4ec3f7': 'blue', '#9b7bff': 'purple', '#ff8ad8': 'pink'
 };
 function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+
+/* Draw an emoji glyph centred at (x,y) with pixel height ~h. Used for the
+   animals (the device's own emoji font keeps them crisp at any size). */
+function emoji(ch, x, y, h) {
+  ctx.save();
+  ctx.font = h + "px 'Noto Color Emoji','Apple Color Emoji','Segoe UI Emoji',sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(ch, x, y + h * 0.06);
+  ctx.restore();
+}
 
 function drawStar(x, y, r, color, rot) {
   ctx.save();
@@ -480,7 +499,13 @@ function setScene(name) {
   sceneName = name;
   scene = SCENES[name];
   if (scene && scene.enter) scene.enter();
+  // Let the Android wrapper (if present) know where we are, so the hardware
+  // Back button can return to the menu instead of closing the app.
+  try { if (window.AndroidApp && window.AndroidApp.onScene) window.AndroidApp.onScene(name); } catch (e) {}
 }
+// Called by the Android Back button.
+window.__goHome = function () { if (sceneName !== 'home') setScene('home'); };
+window.__atHome = function () { return sceneName === 'home'; };
 
 /* -------------------- HOME / MENU -------------------- */
 const SCENES = {};
@@ -488,31 +513,41 @@ const SCENES = {};
 SCENES.home = (function () {
   let buttons = [];
   let uniBob = 0;
+  const DEFS = [
+    { id: 'counting', color: '#ffd23f' },
+    { id: 'colors', color: '#ff5d8f' },
+    { id: 'shapes', color: '#4ec3f7' },
+    { id: 'music', color: '#7bd66b' },
+    { id: 'animals', color: '#ff9b54' },
+    { id: 'letters', color: '#9b7bff' },
+    { id: 'jigsaw', color: '#4ec1a8' },
+    { id: 'findcolor', color: '#ff7eb3' }
+  ];
+  let uy = 0, uScale = 0;
   function layout() {
-    // four big activity bubbles in a 2x2 grid below the unicorn
-    const cx = W / 2;
-    const gridY = H * 0.62;
-    const gap = S() * 0.27;
-    const r = S() * 0.12;
-    const defs = [
-      { id: 'counting', color: '#ffd23f', label: 'count' },
-      { id: 'colors', color: '#ff5d8f', label: 'colour' },
-      { id: 'shapes', color: '#4ec3f7', label: 'shapes' },
-      { id: 'music', color: '#7bd66b', label: 'music' }
-    ];
-    buttons = defs.map((d, i) => {
-      const col = i % 2, row = (i / 2) | 0;
-      return { ...d, x: cx + (col - 0.5) * gap, y: gridY + (row - 0.4) * gap, r };
+    // Landscape (the car!) -> 4x2; portrait -> 2x4. Unicorn sits above.
+    const landscape = W > H * 1.15;
+    const cols = landscape ? 4 : 2;
+    const rows = Math.ceil(DEFS.length / cols);
+    const topBand = landscape ? H * 0.30 : H * 0.34;   // space for the unicorn
+    uy = topBand * (landscape ? 0.5 : 0.46);
+    uScale = (landscape ? H : W) * (landscape ? 0.13 : 0.15);
+    const gridTop = topBand, gridH = H - topBand;
+    const cellW = W / cols, cellH = gridH / rows;
+    const r = Math.min(cellW, cellH) * 0.40;
+    buttons = DEFS.map((d, i) => {
+      const col = i % cols, row = (i / cols) | 0;
+      return { ...d, x: cellW * (col + 0.5), y: gridTop + cellH * (row + 0.5), r };
     });
   }
   function drawIcon(b) {
     const x = b.x, y = b.y, r = b.r;
+    ctx.fillStyle = '#fff';
     if (b.id === 'counting') {
       drawStar(x - r * 0.35, y - r * 0.1, r * 0.32, '#fff', 0);
       drawStar(x + r * 0.35, y - r * 0.15, r * 0.28, '#fff8dc', 0.5);
       drawStar(x, y + r * 0.4, r * 0.26, '#fff', 1);
     } else if (b.id === 'colors') {
-      // rainbow arcs
       for (let i = 0; i < 4; i++) {
         ctx.strokeStyle = RAINBOW[i]; ctx.lineWidth = r * 0.16;
         ctx.beginPath(); ctx.arc(x, y + r * 0.35, r * (0.28 + i * 0.18), Math.PI, 0); ctx.stroke();
@@ -522,13 +557,34 @@ SCENES.home = (function () {
       drawShape('square', x + r * 0.32, y - r * 0.22, r * 0.24, '#fff8dc');
       drawTriangle(x, y + r * 0.4, r * 0.34, '#fff');
     } else if (b.id === 'music') {
-      ctx.fillStyle = '#fff';
-      // music note
       ctx.beginPath(); ctx.arc(x - r * 0.2, y + r * 0.3, r * 0.22, 0, 6.2832); ctx.fill();
       ctx.beginPath(); ctx.arc(x + r * 0.35, y + r * 0.12, r * 0.22, 0, 6.2832); ctx.fill();
       ctx.fillRect(x - r * 0.02, y - r * 0.45, r * 0.12, r * 0.78);
       ctx.fillRect(x + r * 0.45, y - r * 0.45, r * 0.12, r * 0.6);
       ctx.fillRect(x - r * 0.02, y - r * 0.45, r * 0.59, r * 0.14);
+    } else if (b.id === 'animals') {
+      emoji('🐱', x, y, r * 1.15);
+    } else if (b.id === 'letters') {
+      ctx.font = 'bold ' + (r * 0.95) + "px 'Comic Sans MS', sans-serif";
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = '#fff'; ctx.fillText('A', x - r * 0.28, y + r * 0.05);
+      ctx.fillStyle = '#fff8dc'; ctx.fillText('b', x + r * 0.3, y + r * 0.1);
+    } else if (b.id === 'jigsaw') {
+      // a chunky puzzle piece
+      ctx.fillStyle = '#fff';
+      rrect(ctx, x - r * 0.5, y - r * 0.5, r, r, r * 0.18); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + r * 0.5, y, r * 0.22, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y - r * 0.5, r * 0.22, 0, 6.2832); ctx.fill();
+      ctx.fillStyle = b.color;
+      ctx.beginPath(); ctx.arc(x, y + r * 0.5, r * 0.22, 0, 6.2832); ctx.fill();
+    } else if (b.id === 'findcolor') {
+      // a magnifying glass over colours
+      drawShape('circle', x - r * 0.3, y - r * 0.25, r * 0.2, '#ffd23f');
+      drawShape('circle', x + r * 0.2, y - r * 0.3, r * 0.2, '#4ec3f7');
+      drawShape('circle', x - r * 0.05, y + r * 0.15, r * 0.2, '#7bd66b');
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = r * 0.12;
+      ctx.beginPath(); ctx.arc(x + r * 0.1, y - r * 0.05, r * 0.42, 0, 6.2832); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x + r * 0.42, y + r * 0.28); ctx.lineTo(x + r * 0.62, y + r * 0.5); ctx.stroke();
     }
   }
   return {
@@ -537,10 +593,7 @@ SCENES.home = (function () {
     update(dt) { uniBob += dt; },
     draw() {
       drawBg(performance.now() / 1000, '#5a3aa8', '#8a6ae0');
-      // Title sparkle band
-      const uy = H * 0.27 + Math.sin(uniBob * 1.6) * S() * 0.012;
-      drawUnicorn(W / 2, uy, S() * 0.16, { mane: RAINBOW });
-      // bubbles
+      drawUnicorn(W / 2, uy + Math.sin(uniBob * 1.6) * S() * 0.012, uScale, { mane: RAINBOW });
       for (const b of buttons) {
         const pulse = 1 + Math.sin(uniBob * 2 + b.x) * 0.03;
         ctx.save();
@@ -548,7 +601,6 @@ SCENES.home = (function () {
         ctx.fillStyle = b.color;
         ctx.beginPath(); ctx.arc(b.x, b.y, b.r * pulse, 0, 6.2832); ctx.fill();
         ctx.restore();
-        // glossy highlight
         ctx.fillStyle = 'rgba(255,255,255,0.25)';
         ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.4, 0, 6.2832); ctx.fill();
         drawIcon(b);
@@ -863,6 +915,305 @@ function drawMiniUnicorn(x, y, r) {
   ctx.restore();
 }
 
+/* Lay items into a tidy responsive grid in the area below y=topFrac*H.
+   Returns [{x,y,r}] for n cells. Landscape gets more columns. */
+function gridLayout(n, topFrac) {
+  const top = H * topFrac;
+  const landscape = W > H * 1.15;
+  const cols = landscape ? Math.min(n, 4) : Math.min(n, 2);
+  const rows = Math.ceil(n / cols);
+  const cellW = W / cols, cellH = (H - top) / rows;
+  const r = Math.min(cellW, cellH) * 0.40;
+  const cells = [];
+  for (let i = 0; i < n; i++) {
+    const col = i % cols, row = (i / cols) | 0;
+    // centre the last (possibly short) row
+    const inRow = Math.min(cols, n - row * cols);
+    const rowW = inRow * cellW;
+    const x0 = (W - rowW) / 2;
+    cells.push({ x: x0 + cellW * (col + 0.5), y: top + cellH * (row + 0.5), r });
+  }
+  return cells;
+}
+
+/* -------------------- 5. ANIMALS & SOUNDS -------------------- */
+SCENES.animals = (function () {
+  const POOL = [
+    { e: '🐱', name: 'Cat', sound: 'meow' }, { e: '🐶', name: 'Dog', sound: 'woof woof' },
+    { e: '🐮', name: 'Cow', sound: 'moo' }, { e: '🐷', name: 'Pig', sound: 'oink oink' },
+    { e: '🐑', name: 'Sheep', sound: 'baa' }, { e: '🐴', name: 'Horse', sound: 'neigh' },
+    { e: '🦆', name: 'Duck', sound: 'quack quack' }, { e: '🐸', name: 'Frog', sound: 'ribbit' },
+    { e: '🦁', name: 'Lion', sound: 'roar' }, { e: '🐔', name: 'Hen', sound: 'cluck cluck' },
+    { e: '🐝', name: 'Bee', sound: 'buzz' }, { e: '🦄', name: 'Unicorn', sound: 'neigh' }
+  ];
+  let cards = [], uniBob = 0;
+  function spawn() {
+    const shuffled = POOL.slice().sort(() => Math.random() - 0.5).slice(0, 6);
+    const cells = gridLayout(6, 0.04);
+    cards = shuffled.map((a, i) => ({ ...a, x: cells[i].x, y: cells[i].y, r: cells[i].r, ph: rand(0, 6.28), pop: 0 }));
+  }
+  return {
+    enter() { spawn(); Speech.say('Tap an animal!'); },
+    resized: spawn,
+    update(dt) { uniBob += dt; for (const c of cards) if (c.pop > 0) c.pop = Math.max(0, c.pop - dt * 2); },
+    draw() {
+      drawBg(performance.now() / 1000, '#2a5a3a', '#4ab070');
+      for (const c of cards) {
+        const bob = Math.sin(uniBob * 1.6 + c.ph) * S() * 0.008;
+        const sc = 1 + c.pop * 0.25;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 5;
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        rrect(ctx, c.x - c.r * sc, c.y - c.r * sc + bob, c.r * 2 * sc, c.r * 2 * sc, c.r * 0.4); ctx.fill();
+        ctx.restore();
+        emoji(c.e, c.x, c.y + bob, c.r * 1.5 * sc);
+      }
+      drawParticles();
+      drawCheer();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      for (const c of cards) {
+        if (Math.abs(x - c.x) < c.r * 1.1 && Math.abs(y - c.y) < c.r * 1.1) {
+          c.pop = 1;
+          Audio2.sparkle();
+          sparkleBurst(c.x, c.y, pick(SPARKLE_COLORS), 14);
+          Speech.say(c.name + '! The ' + c.name.toLowerCase() + ' says ' + c.sound + '.');
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 6. LETTERS (ABC) -------------------- */
+SCENES.letters = (function () {
+  const WORDS = {
+    A: 'Apple', B: 'Ball', C: 'Cat', D: 'Dog', E: 'Elephant', F: 'Fish', G: 'Goat',
+    H: 'Hat', I: 'Igloo', J: 'Jam', K: 'Kite', L: 'Lion', M: 'Moon', N: 'Nest',
+    O: 'Orange', P: 'Pig', Q: 'Queen', R: 'Rainbow', S: 'Sun', T: 'Tree',
+    U: 'Unicorn', V: 'Violin', W: 'Water', X: 'Xylophone', Y: 'Yoyo', Z: 'Zebra'
+  };
+  const KEYS = Object.keys(WORDS);
+  let bubbles = [], spawnT = 0, uniBob = 0;
+  function addBubble() {
+    const k = KEYS[(Math.random() * KEYS.length) | 0];
+    const r = S() * 0.1;
+    bubbles.push({
+      x: rand(r * 1.2, W - r * 1.2), y: H + r,
+      vy: -rand(0.45, 0.9) * (S() / 600), r, key: k, color: pick(RAINBOW),
+      sway: rand(0, 6.28), pop: 0
+    });
+  }
+  return {
+    enter() { bubbles = []; spawnT = 0; for (let i = 0; i < 3; i++) addBubble(); Speech.say('Tap the letters!'); },
+    update(dt) {
+      uniBob += dt; spawnT += dt;
+      if (spawnT > 1.4 && bubbles.length < 5) { spawnT = 0; addBubble(); }
+      for (let i = bubbles.length - 1; i >= 0; i--) {
+        const b = bubbles[i];
+        b.y += b.vy * dt * 60;
+        b.x += Math.sin(uniBob * 1.4 + b.sway) * 0.4;
+        if (b.pop > 0) { b.pop += dt * 4; if (b.pop > 1) bubbles.splice(i, 1); }
+        else if (b.y < -b.r * 2) bubbles.splice(i, 1);
+      }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#3a2a6a', '#6a4ac0');
+      for (const b of bubbles) {
+        const sc = b.pop > 0 ? 1 + b.pop * 0.5 : 1;
+        const a = b.pop > 0 ? clamp(1 - b.pop, 0, 1) : 1;
+        ctx.globalAlpha = a;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 4;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.35, 0, 6.2832); ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold ' + (b.r * 1.1 * sc) + "px 'Comic Sans MS', sans-serif";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(b.key, b.x, b.y + b.r * 0.05);
+        ctx.globalAlpha = 1;
+      }
+      drawParticles();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      for (const b of bubbles) {
+        if (b.pop === 0 && dist2(x, y, b.x, b.y) < (b.r * 1.1) * (b.r * 1.1)) {
+          b.pop = 0.001;
+          Audio2.sparkle();
+          sparkleBurst(b.x, b.y, b.color, 14);
+          Speech.say(b.key + '. ' + b.key + ' is for ' + WORDS[b.key] + '.');
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 7. SIMPLE JIGSAW (match & drag) -------------------- */
+SCENES.jigsaw = (function () {
+  let slots = [], pieces = [], held = null, offx = 0, offy = 0, uniBob = 0, locked = false, timer = 0;
+  function spawn() {
+    locked = false;
+    const chosen = SHAPES.slice().sort(() => Math.random() - 0.5).slice(0, 3);
+    const slotCells = gridLayout(3, 0.06);          // silhouettes up top
+    slots = chosen.map((sh, i) => ({ def: sh, x: slotCells[i].x, y: slotCells[i].y * 0.85, r: slotCells[i].r, filled: false }));
+    // pieces scattered along the lower third, shuffled order
+    const order = [0, 1, 2].sort(() => Math.random() - 0.5);
+    const py = H * 0.82;
+    pieces = order.map((slotIndex, k) => ({
+      slotIndex, def: chosen[slotIndex],
+      x: W * (0.25 + k * 0.25), y: py, hx: W * (0.25 + k * 0.25), hy: py,
+      r: slots[0].r, placed: false
+    }));
+    Speech.say('Drag the shapes to their homes!');
+  }
+  return {
+    enter() { spawn(); },
+    resized() { /* keep current puzzle but re-centre roughly */ },
+    update(dt) {
+      uniBob += dt;
+      if (locked) { timer += dt; if (timer > 2.4) { timer = 0; spawn(); } }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#2a4a6a', '#3a8ac0');
+      // slots (faded targets)
+      for (const s of slots) {
+        ctx.globalAlpha = s.filled ? 0.0 : 0.35;
+        drawShape(s.def.kind, s.x, s.y, s.r, s.def.color);
+        ctx.globalAlpha = 1;
+        if (!s.filled) {
+          ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 3; ctx.setLineDash([8, 8]);
+          ctx.beginPath(); ctx.arc(s.x, s.y, s.r * 1.15, 0, 6.2832); ctx.stroke(); ctx.setLineDash([]);
+        }
+      }
+      // pieces
+      for (const p of pieces) {
+        const wob = (p === held) ? 0 : Math.sin(uniBob * 2 + p.x) * S() * 0.006;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.3)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 6;
+        drawShape(p.def.kind, p.x, p.y + wob, p.r, p.def.color);
+        ctx.restore();
+      }
+      drawParticles();
+      drawCheer();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      if (locked) return;
+      // pick the topmost unplaced piece under the finger
+      for (let i = pieces.length - 1; i >= 0; i--) {
+        const p = pieces[i];
+        if (!p.placed && dist2(x, y, p.x, p.y) < (p.r * 1.3) * (p.r * 1.3)) {
+          held = p; offx = x - p.x; offy = y - p.y;
+          Audio2.tap();
+          pieces.splice(i, 1); pieces.push(p); // draw on top
+          return;
+        }
+      }
+    },
+    pointerMove(x, y) {
+      if (held) { held.x = x - offx; held.y = y - offy; }
+    },
+    pointerUp(x, y) {
+      if (!held) return;
+      const p = held; held = null;
+      const s = slots[p.slotIndex];
+      if (!s.filled && dist2(p.x, p.y, s.x, s.y) < (s.r * 1.8) * (s.r * 1.8)) {
+        p.x = s.x; p.y = s.y; p.placed = true; s.filled = true;
+        Audio2.note(p.slotIndex + 2, 0.3);
+        sparkleBurst(s.x, s.y, p.def.color, 16);
+        Speech.say(p.def.word + '!');
+        if (slots.every(sl => sl.filled)) {
+          locked = true; timer = 0;
+          setTimeout(() => { Speech.say('You did it! Hooray!'); Audio2.success(); confetti(); cheer(); }, 500);
+        }
+      } else {
+        // not close enough — drift back home so nothing gets lost
+        p.x = p.hx; p.y = p.hy;
+        Audio2.tap();
+      }
+    }
+  };
+})();
+
+/* -------------------- 8. FIND THE COLOUR -------------------- */
+SCENES.findcolor = (function () {
+  const PALETTE = [
+    { c: '#ff5d8f', w: 'pink' }, { c: '#ff4d4d', w: 'red' }, { c: '#ff9b54', w: 'orange' },
+    { c: '#ffd23f', w: 'yellow' }, { c: '#7bd66b', w: 'green' }, { c: '#4ec3f7', w: 'blue' },
+    { c: '#9b7bff', w: 'purple' }
+  ];
+  let items = [], target = null, locked = false, timer = 0, uniBob = 0, wrong = null;
+  function ask() { Speech.say('Find the ' + target.w + ' one!'); }
+  function spawn() {
+    locked = false; wrong = null;
+    const chosen = PALETTE.slice().sort(() => Math.random() - 0.5).slice(0, 4);
+    target = chosen[(Math.random() * chosen.length) | 0];
+    const cells = gridLayout(4, 0.34);
+    items = chosen.map((col, i) => ({ ...col, x: cells[i].x, y: cells[i].y, r: cells[i].r, ph: rand(0, 6.28), shake: 0 }));
+    setTimeout(ask, 350);
+  }
+  return {
+    enter() { spawn(); },
+    resized() { const cells = gridLayout(items.length || 4, 0.34); items.forEach((it, i) => { it.x = cells[i].x; it.y = cells[i].y; it.r = cells[i].r; }); },
+    update(dt) {
+      uniBob += dt;
+      for (const it of items) if (it.shake > 0) it.shake = Math.max(0, it.shake - dt * 3);
+      if (locked) { timer += dt; if (timer > 2.0) { timer = 0; spawn(); } }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#4a2a6a', '#8a5ac0');
+      // a friendly unicorn asking, up top
+      drawUnicorn(W / 2, H * 0.17, S() * 0.09, { mane: RAINBOW, happy: locked ? 1 : 0 });
+      for (const it of items) {
+        const bob = Math.sin(uniBob * 1.6 + it.ph) * S() * 0.01;
+        const shk = it.shake > 0 ? Math.sin(it.shake * 30) * S() * 0.02 : 0;
+        // a balloon
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(it.x + shk, it.y + bob + it.r);
+        ctx.lineTo(it.x + shk, it.y + bob + it.r * 2.2); ctx.stroke();
+        ctx.shadowColor = 'rgba(0,0,0,0.2)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 5;
+        ctx.fillStyle = it.c;
+        ctx.beginPath(); ctx.ellipse(it.x + shk, it.y + bob, it.r * 0.9, it.r, 0, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.beginPath(); ctx.arc(it.x + shk - it.r * 0.3, it.y + bob - it.r * 0.4, it.r * 0.28, 0, 6.2832); ctx.fill();
+      }
+      drawParticles();
+      drawCheer();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      if (locked) return;
+      for (const it of items) {
+        if (Math.abs(x - it.x) < it.r * 1.1 && Math.abs(y - it.y) < it.r * 1.3) {
+          if (it.c === target.c) {
+            locked = true; timer = 0;
+            sparkleBurst(it.x, it.y, it.c, 20);
+            Audio2.success(); confetti(); cheer();
+            Speech.say('Yes! ' + target.w + '! Well done!');
+          } else {
+            it.shake = 1;
+            Audio2.tap();
+            Speech.say('Try again. Find the ' + target.w + ' one.');
+          }
+          return;
+        }
+      }
+    }
+  };
+})();
+
 /* =====================================================================
    INPUT + MAIN LOOP
    ===================================================================== */
@@ -876,9 +1227,18 @@ function onDown(e) {
   const { x, y } = getXY(e);
   if (scene && scene.pointerDown) scene.pointerDown(x, y);
 }
+function onMove(e) {
+  if (scene && scene.pointerMove) { const { x, y } = getXY(e); scene.pointerMove(x, y); }
+}
+function onUp(e) {
+  if (scene && scene.pointerUp) { const { x, y } = getXY(e); scene.pointerUp(x, y); }
+}
 // pointerdown covers both touch and mouse on Chrome/Android — one listener
-// avoids each tap firing twice.
+// avoids each tap firing twice. move/up enable the drag-based games.
 canvas.addEventListener('pointerdown', onDown, { passive: false });
+canvas.addEventListener('pointermove', onMove, { passive: false });
+canvas.addEventListener('pointerup', onUp, { passive: false });
+canvas.addEventListener('pointercancel', onUp, { passive: false });
 
 window.addEventListener('resize', () => { if (scene && scene.resized) scene.resized(); });
 

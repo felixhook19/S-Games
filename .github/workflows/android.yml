@@ -1,0 +1,67 @@
+name: Build Unicorn Magic APK
+
+# Builds the installable Android APK. Runs on every push to the game branch,
+# and can be started by hand from the Actions tab (Run workflow).
+on:
+  push:
+    branches:
+      - claude/toddler-unicorn-game-android-t7qge5
+    paths:
+      - 'unicorn-magic.html'
+      - 'android/**'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to publish the APK as a Release asset
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up the Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build the debug APK
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Rename the APK
+        run: |
+          mkdir -p out
+          cp android/app/build/outputs/apk/debug/app-debug.apk out/unicorn-magic.apk
+          ls -la out
+
+      - name: Upload the APK as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicorn-magic-apk
+          path: out/unicorn-magic.apk
+          if-no-files-found: error
+
+      # Also publish to a Release so it has a stable download link you can open
+      # on a phone/computer without digging into the Actions UI.
+      - name: Publish the APK to a Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Unicorn Magic (latest APK)
+          body: |
+            The latest build of Unicorn Magic.
+
+            Download **unicorn-magic.apk**, copy it to the phone, and tap it to
+            install (you may need to allow "Install unknown apps" once). The app
+            is fully offline and requests no permissions.
+          files: out/unicorn-magic.apk
+          fail_on_unmatched_files: true
