@@ -35,6 +35,30 @@ always goes back home. Turn the volume up!
 Designed for the car: big tap targets, no tiny buttons, no menus to read, calm
 pacing, and it works in any orientation.
 
+### The challenge grows with her
+
+Each game now sets a little task rather than just letting her explore, and it
+gets harder as she succeeds (and eases back a touch if she's struggling). Her
+level in each game is remembered between sessions, so she picks up where she
+left off:
+
+- **Counting Stars** – the count to reach climbs from 3 up to 10, and the stars
+  start gently drifting so they're harder to catch.
+- **Colour the Unicorn** – a voice names a colour and she has to find the right
+  paint (the correct blob glows to help after a few tries); more of the mane to
+  colour as she improves.
+- **Shape Bubbles** – pop only the shape shown in the badge / named aloud; more
+  bubbles, faster, at higher levels.
+- **Rainbow Music** – now "copy the tune": the unicorns play a melody and she
+  plays it back from memory; the tune gains a note each time she's right.
+- **Animals** – "can you find the cow?"; any tap still teaches the animal, but
+  finding the right one is the goal. More animals on screen as she levels up.
+- **Letters** – "find the letter B" (shown in a badge to match); more letters,
+  faster.
+- **Jigsaw** – grows from 3 to 5 pieces, and at higher levels every piece is the
+  same colour, so she has to match by **shape** alone.
+- **Find the Colour** – more balloons, and trickier colours to tell apart.
+
 ---
 
 ## Getting the app onto the (offline) Pixel 6 Pro

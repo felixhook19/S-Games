@@ -571,6 +571,22 @@ function setScene(name) {
 window.__goHome = function () { if (sceneName !== 'home') setScene('home'); };
 window.__atHome = function () { return sceneName === 'home'; };
 
+/* -------------------- Progression -------------------- */
+/* Each game keeps a "level" that climbs as she succeeds and eases back a
+   little after several misses, so the challenge follows her ability. Levels
+   are remembered between sessions (so she picks up where she left off). */
+const Progress = (function () {
+  let data = {};
+  try { data = JSON.parse(localStorage.getItem('uniLevels') || '{}') || {}; } catch (e) { data = {}; }
+  function save() { try { localStorage.setItem('uniLevels', JSON.stringify(data)); } catch (e) {} }
+  return {
+    level(k) { return data[k] | 0; },
+    up(k, max) { data[k] = Math.min(max == null ? 20 : max, (data[k] | 0) + 1); save(); },
+    down(k) { data[k] = Math.max(0, (data[k] | 0) - 1); save(); }
+  };
+})();
+
+
 /* -------------------- HOME / MENU -------------------- */
 const SCENES = {};
 
@@ -686,11 +702,14 @@ SCENES.home = (function () {
 
 /* -------------------- 1. COUNTING STARS -------------------- */
 SCENES.counting = (function () {
-  let stars = [], target = 3, counted = 0, locked = false, timer = 0, uniBob = 0;
+  let stars = [], target = 3, counted = 0, locked = false, timer = 0, uniBob = 0, level = 0;
   const NUM_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
   function spawn() {
     stars = [];
     counted = 0; locked = false;
+    level = Progress.level('counting');
+    target = clamp(3 + level, 3, 10);              // the count to reach grows: 3 -> 10
+    const spd = Math.max(0, level - 1) * 0.5;        // stars begin to drift at higher levels
     const r = S() * 0.075;
     const margin = r * 1.4;
     for (let i = 0; i < target; i++) {
@@ -700,18 +719,28 @@ SCENES.counting = (function () {
         y = rand(H * 0.28, H * 0.85);
         tries++;
       } while (tries < 30 && stars.some(s => dist2(x, y, s.x, s.y) < (r * 2.3) * (r * 2.3)));
-      stars.push({ x, y, r, got: false, ph: rand(0, 6.28), color: RAINBOW[i % RAINBOW.length], pop: 0 });
+      const a = rand(0, 6.28), v = spd * (S() / 700);
+      stars.push({ x, y, r, got: false, ph: rand(0, 6.28), color: RAINBOW[i % RAINBOW.length], pop: 0,
+                   vx: Math.cos(a) * v, vy: Math.sin(a) * v });
     }
     Speech.say('Can you find ' + NUM_WORDS[target] + ' stars? Tap them!');
   }
   return {
-    enter() { target = 3; spawn(); },
+    enter() { spawn(); },
     update(dt) {
       uniBob += dt;
-      for (const s of stars) if (s.pop > 0) s.pop = Math.max(0, s.pop - dt * 3);
+      const margin = (stars[0] ? stars[0].r : 0) * 1.4;
+      for (const s of stars) {
+        if (s.pop > 0) s.pop = Math.max(0, s.pop - dt * 3);
+        if (!s.got && (s.vx || s.vy)) {
+          s.x += s.vx * dt * 60; s.y += s.vy * dt * 60;
+          if (s.x < margin || s.x > W - margin) { s.vx *= -1; s.x = clamp(s.x, margin, W - margin); }
+          if (s.y < H * 0.24 || s.y > H * 0.9) { s.vy *= -1; s.y = clamp(s.y, H * 0.24, H * 0.9); }
+        }
+      }
       if (locked) {
         timer += dt;
-        if (timer > 2.2) { timer = 0; target = target >= 10 ? 3 : target + 1; spawn(); }
+        if (timer > 2.2) { timer = 0; spawn(); }
       }
     },
     draw() {
@@ -749,6 +778,7 @@ SCENES.counting = (function () {
           Speech.say(NUM_WORDS[counted]);
           if (counted >= target) {
             locked = true; timer = 0;
+            Progress.up('counting');
             setTimeout(() => {
               Speech.say(NUM_WORDS[target] + ' stars! Hooray!');
               Audio2.success(); confetti(); cheer();
@@ -763,12 +793,11 @@ SCENES.counting = (function () {
 
 /* -------------------- 2. COLOUR THE UNICORN -------------------- */
 SCENES.colors = (function () {
-  // The unicorn's mane/tail/horn start grey. Tap a paint blob to colour
-  // the next part and hear the colour name.
-  const PARTS = 6;
-  let filled = [];      // colour per mane slot, null = grey
-  let blobs = [];
-  let uniBob = 0, locked = false, timer = 0;
+  // The unicorn's mane starts grey. A voice names a colour; she must tap the
+  // matching paint blob to colour the next part. Wrong taps gently say what
+  // she tapped and re-ask; after a few tries the right blob glows to help.
+  let filled = [], blobs = [], uniBob = 0, locked = false, timer = 0;
+  let target = null, wrongCount = 0, parts = 6, hint = -1;
   const PALETTE = ['#ff5d8f', '#ff9b54', '#ffd23f', '#7bd66b', '#4ec3f7', '#9b7bff'];
   function layoutBlobs() {
     blobs = [];
@@ -778,40 +807,54 @@ SCENES.colors = (function () {
     for (let i = 0; i < n; i++) {
       blobs.push({
         x: W / 2 - totalW / 2 + r * 1.2 + i * r * 2.4,
-        y: H * 0.86, r, color: PALETTE[i], ph: rand(0, 6.28), pop: 0
+        y: H * 0.86, r, color: PALETTE[i], ph: rand(0, 6.28), pop: 0, shake: 0
       });
     }
   }
+  function newTarget(delay) {
+    wrongCount = 0; hint = -1;
+    target = PALETTE[(Math.random() * PALETTE.length) | 0];
+    setTimeout(() => { if (!locked) Speech.say('Can you find ' + (COLOR_WORDS[target] || 'a colour') + '?'); }, delay || 250);
+  }
   function reset() {
-    filled = new Array(PARTS).fill(null);
+    parts = clamp(3 + Progress.level('colors'), 3, 6);   // more of the mane to colour as she improves
+    filled = new Array(parts).fill(null);
     locked = false;
-    Speech.say('Tap a colour to paint the unicorn!');
+    newTarget();
   }
   function curMane() {
-    // greys where not filled
-    return filled.map((c, i) => c || (i % 2 ? '#c9c4d6' : '#b8b2c8'));
+    const out = [];
+    for (let i = 0; i < 6; i++) out.push(filled[i] || (i % 2 ? '#c9c4d6' : '#b8b2c8'));
+    return out;
   }
   return {
     enter() { layoutBlobs(); reset(); },
     resized: layoutBlobs,
     update(dt) {
       uniBob += dt;
-      for (const b of blobs) if (b.pop > 0) b.pop = Math.max(0, b.pop - dt * 3);
+      for (const b of blobs) {
+        if (b.pop > 0) b.pop = Math.max(0, b.pop - dt * 3);
+        if (b.shake > 0) b.shake = Math.max(0, b.shake - dt * 3);
+      }
       if (locked) { timer += dt; if (timer > 2.4) { timer = 0; reset(); } }
     },
     draw() {
       drawBg(performance.now() / 1000, '#3a2a6a', '#7a5ad0');
       const uy = H * 0.42 + Math.sin(uniBob * 1.5) * S() * 0.012;
       drawUnicorn(W / 2, uy, S() * 0.2, { mane: curMane(), happy: locked ? 1 : 0 });
-      // paint blobs
-      for (const b of blobs) {
-        const sc = 1 + Math.sin(uniBob * 2 + b.ph) * 0.04 + b.pop * 0.4;
-        ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 5;
+      for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
+        const shk = b.shake > 0 ? Math.sin(b.shake * 30) * S() * 0.02 : 0;
+        const glow = (hint === i) ? (0.5 + 0.5 * Math.sin(uniBob * 6)) : 0;
+        const sc = 1 + Math.sin(uniBob * 2 + b.ph) * 0.04 + b.pop * 0.4 + glow * 0.15;
+        ctx.save();
+        ctx.shadowColor = glow ? '#ffffff' : 'rgba(0,0,0,0.25)';
+        ctx.shadowBlur = glow ? 25 : 14; ctx.shadowOffsetY = 5;
         ctx.fillStyle = b.color;
-        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x + shk, b.y, b.r * sc, 0, 6.2832); ctx.fill();
         ctx.restore();
         ctx.fillStyle = 'rgba(255,255,255,0.3)';
-        ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.35, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x + shk - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.35, 0, 6.2832); ctx.fill();
       }
       drawParticles();
       drawCheer();
@@ -820,19 +863,30 @@ SCENES.colors = (function () {
     pointerDown(x, y) {
       if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
       if (locked) return;
-      for (const b of blobs) {
+      for (let i = 0; i < blobs.length; i++) {
+        const b = blobs[i];
         if (dist2(x, y, b.x, b.y) < (b.r * 1.2) * (b.r * 1.2)) {
-          b.pop = 1;
-          const slot = filled.indexOf(null);
-          if (slot >= 0) {
-            filled[slot] = b.color;
-            sparkleBurst(W / 2, H * 0.42, b.color, 18);
-            Audio2.note(slot, 0.3);
-            Speech.say(COLOR_WORDS[b.color] || 'colour');
-            if (filled.indexOf(null) < 0) {
-              locked = true; timer = 0;
-              setTimeout(() => { Speech.say('So pretty! Hooray!'); Audio2.success(); confetti(); cheer(); }, 600);
+          if (b.color === target) {
+            b.pop = 1;
+            const slot = filled.indexOf(null);
+            if (slot >= 0) {
+              filled[slot] = b.color;
+              sparkleBurst(W / 2, H * 0.42, b.color, 18);
+              Audio2.note(slot, 0.3);
+              Speech.say('Yes! ' + (COLOR_WORDS[b.color] || 'colour') + '!');
+              if (filled.indexOf(null) < 0) {
+                locked = true; timer = 0;
+                Progress.up('colors');
+                setTimeout(() => { Speech.say('So pretty! Hooray!'); Audio2.success(); confetti(); cheer(); }, 600);
+              } else {
+                newTarget(1200);                  // let the praise finish before the next ask
+              }
             }
+          } else {
+            b.shake = 1; Audio2.tap();
+            wrongCount++;
+            if (wrongCount >= 3) hint = PALETTE.indexOf(target);
+            Speech.say('That is ' + (COLOR_WORDS[b.color] || 'a colour') + '. Find ' + (COLOR_WORDS[target] || 'the colour') + '.');
           }
           return;
         }
@@ -843,26 +897,37 @@ SCENES.colors = (function () {
 
 /* -------------------- 3. SHAPE BUBBLES -------------------- */
 SCENES.shapes = (function () {
-  let bubbles = [], spawnT = 0, uniBob = 0;
+  let bubbles = [], spawnT = 0, uniBob = 0, target = null, correct = 0, level = 0;
+  function newTarget() {
+    target = SHAPES[(Math.random() * SHAPES.length) | 0];
+    Speech.say('Pop the ' + target.word + '!');
+  }
   function addBubble() {
-    const def = SHAPES[(Math.random() * SHAPES.length) | 0];
+    // bias some bubbles toward the target shape so it is always reachable
+    const def = (target && Math.random() < 0.45) ? target : SHAPES[(Math.random() * SHAPES.length) | 0];
     const r = S() * 0.085;
+    const sp = 1 + level * 0.08;
     bubbles.push({
       x: rand(r * 1.2, W - r * 1.2), y: H + r,
-      vy: -rand(0.5, 1.1) * (S() / 600), r, def,
-      sway: rand(0, 6.28), pop: 0
+      vy: -rand(0.5, 1.1) * (S() / 600) * sp, r, def,
+      sway: rand(0, 6.28), pop: 0, wob: 0
     });
   }
   return {
-    enter() { bubbles = []; spawnT = 0; for (let i = 0; i < 3; i++) addBubble(); Speech.say('Pop the shapes!'); },
+    enter() {
+      bubbles = []; spawnT = 0; correct = 0; level = Progress.level('shapes');
+      newTarget(); for (let i = 0; i < 3; i++) addBubble();
+    },
     update(dt) {
-      uniBob += dt;
-      spawnT += dt;
-      if (spawnT > 1.3 && bubbles.length < 6) { spawnT = 0; addBubble(); }
+      uniBob += dt; spawnT += dt;
+      const maxB = clamp(4 + level, 4, 9);              // busier as she levels up
+      const interval = clamp(1.3 - level * 0.12, 0.5, 1.3);
+      if (spawnT > interval && bubbles.length < maxB) { spawnT = 0; addBubble(); }
       for (let i = bubbles.length - 1; i >= 0; i--) {
         const b = bubbles[i];
         b.y += b.vy * dt * 60;
         b.x += Math.sin(uniBob * 1.5 + b.sway) * 0.4;
+        if (b.wob > 0) b.wob = Math.max(0, b.wob - dt * 3);
         if (b.pop > 0) { b.pop += dt * 4; if (b.pop > 1) bubbles.splice(i, 1); }
         else if (b.y < -b.r * 2) bubbles.splice(i, 1);
       }
@@ -872,14 +937,25 @@ SCENES.shapes = (function () {
       for (const b of bubbles) {
         const sc = b.pop > 0 ? 1 + b.pop * 0.6 : 1;
         const a = b.pop > 0 ? clamp(1 - b.pop, 0, 1) : 1;
+        const shk = b.wob > 0 ? Math.sin(b.wob * 30) * S() * 0.012 : 0;
         ctx.globalAlpha = a;
         // bubble shell
         ctx.fillStyle = 'rgba(255,255,255,0.18)';
-        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.fill();
+        ctx.beginPath(); ctx.arc(b.x + shk, b.y, b.r * sc, 0, 6.2832); ctx.fill();
         ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.stroke();
-        drawShape(b.def.kind, b.x, b.y, b.r * 0.55 * sc, b.def.color);
+        ctx.beginPath(); ctx.arc(b.x + shk, b.y, b.r * sc, 0, 6.2832); ctx.stroke();
+        drawShape(b.def.kind, b.x + shk, b.y, b.r * 0.55 * sc, b.def.color);
         ctx.globalAlpha = 1;
+      }
+      // target badge: the shape she should pop, shown top-centre
+      if (target) {
+        const bx = W / 2, by = S() * 0.1, br = S() * 0.07;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+        ctx.fillStyle = 'rgba(255,255,255,0.9)';
+        ctx.beginPath(); ctx.arc(bx, by, br, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        drawShape(target.kind, bx, by, br * 0.55, target.color);
       }
       drawParticles();
       drawHomeButton();
@@ -888,10 +964,19 @@ SCENES.shapes = (function () {
       if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
       for (const b of bubbles) {
         if (b.pop === 0 && dist2(x, y, b.x, b.y) < (b.r * 1.1) * (b.r * 1.1)) {
-          b.pop = 0.001;
-          Audio2.pop();
-          sparkleBurst(b.x, b.y, b.def.color, 14);
-          Speech.say(b.def.word);
+          if (b.def.kind === target.kind) {
+            b.pop = 0.001;
+            Audio2.pop();
+            sparkleBurst(b.x, b.y, b.def.color, 14);
+            Speech.say('Yes! ' + b.def.word + '!');
+            correct++;
+            if (correct % 3 === 0) { Progress.up('shapes'); level = Progress.level('shapes'); }
+            setTimeout(newTarget, 900);            // let the praise finish before the next ask
+          } else {
+            // wrong shape: don't pop, gently name it and re-ask
+            b.wob = 1; Audio2.tap();
+            Speech.say('That is a ' + b.def.word + '. Pop the ' + target.word + '.');
+          }
           return;
         }
       }
@@ -901,9 +986,10 @@ SCENES.shapes = (function () {
 
 /* -------------------- 4. RAINBOW MUSIC -------------------- */
 SCENES.music = (function () {
-  // A rainbow xylophone of bars, each with a little unicorn head.
-  // Tapping plays a happy pentatonic note. Pure cause & effect.
+  // A rainbow xylophone. The unicorns play a little tune; she copies it back.
+  // The tune gets one note longer each time she gets it right (a memory game).
   let bars = [], uniBob = 0;
+  let seq = [], showIdx = 0, showTimer = 0, inputIdx = 0, mode = 'show';
   function layout() {
     bars = [];
     const n = 6;
@@ -914,12 +1000,31 @@ SCENES.music = (function () {
       bars.push({ x: pad + i * bw, w: bw * 0.86, h, color: RAINBOW[i], idx: i, press: 0 });
     }
   }
+  function newRound() {
+    const len = clamp(2 + Progress.level('music'), 2, 7);
+    seq = [];
+    for (let i = 0; i < len; i++) seq.push((Math.random() * bars.length) | 0);
+    showIdx = 0; showTimer = 0.8; inputIdx = 0; mode = 'show';
+    Speech.say('Listen!');
+  }
+  function replay() { showIdx = 0; showTimer = 0.6; inputIdx = 0; mode = 'show'; Speech.say('Listen again!'); }
+  function lightUp(b, vol) {
+    b.press = 1; Audio2.note(b.idx, vol);
+    sparkleBurst(b.x + b.w / 2, H - b.h, b.color, 8);
+  }
   return {
-    enter() { layout(); Speech.say('Make some music!'); },
+    enter() { layout(); newRound(); },
     resized: layout,
     update(dt) {
       uniBob += dt;
       for (const b of bars) if (b.press > 0) b.press = Math.max(0, b.press - dt * 4);
+      if (mode === 'show') {
+        showTimer -= dt;
+        if (showTimer <= 0) {
+          if (showIdx < seq.length) { lightUp(bars[seq[showIdx]], 0.4); showIdx++; showTimer = 0.62; }
+          else { mode = 'input'; Speech.say('Your turn!'); }
+        }
+      }
     },
     draw() {
       drawBg(performance.now() / 1000, '#5a2a6a', '#a05ad0');
@@ -930,12 +1035,18 @@ SCENES.music = (function () {
         ctx.fillStyle = b.color;
         rrect(ctx, b.x, top, b.w, b.h + H, S() * 0.04); ctx.fill();
         ctx.restore();
-        // glossy stripe
         ctx.fillStyle = 'rgba(255,255,255,0.22)';
         rrect(ctx, b.x + b.w * 0.12, top + S() * 0.02, b.w * 0.2, b.h * 0.7, S() * 0.02); ctx.fill();
-        // little unicorn head bobbing on top
         const hb = Math.sin(uniBob * 2 + b.idx) * S() * 0.008;
         drawMiniUnicorn(b.x + b.w / 2, top - S() * 0.05 + hb, S() * 0.05);
+      }
+      // progress pips: how many notes of the tune she has echoed back
+      const pipR = S() * 0.018, py = S() * 0.09;
+      const totalW = seq.length * pipR * 2.6;
+      for (let i = 0; i < seq.length; i++) {
+        const px = W / 2 - totalW / 2 + pipR * 1.3 + i * pipR * 2.6;
+        const lit = (mode === 'input') ? i < inputIdx : i < showIdx;
+        drawStar(px, py, pipR, lit ? '#ffd23f' : 'rgba(255,255,255,0.25)', 0);
       }
       drawParticles();
       drawHomeButton();
@@ -944,9 +1055,24 @@ SCENES.music = (function () {
       if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
       for (const b of bars) {
         if (x >= b.x && x <= b.x + b.w && y >= H - b.h - S() * 0.08) {
-          b.press = 1;
-          Audio2.note(b.idx, 0.35);
-          sparkleBurst(b.x + b.w / 2, H - b.h, b.color, 10);
+          lightUp(b, 0.35);                       // every tap plays its note
+          if (mode === 'input') {
+            if (b.idx === seq[inputIdx]) {
+              inputIdx++;
+              if (inputIdx >= seq.length) {
+                mode = 'done';
+                Progress.up('music');
+                confetti(); cheer();
+                setTimeout(() => { Audio2.success(); Speech.say('You did it! Hooray!'); }, 250);
+                setTimeout(newRound, 2600);
+              }
+            } else {
+              mode = 'wait';
+              Progress.down('music');
+              Speech.say('Oops!');
+              setTimeout(replay, 1100);
+            }
+          }
           return;
         }
       }
@@ -1000,6 +1126,16 @@ function gridLayout(n, topFrac) {
   return cells;
 }
 
+/* A single horizontal row of n cells centred on y=yFrac*H. Used by the jigsaw
+   so slots and pieces never overlap however many pieces there are. */
+function rowLayout(n, yFrac) {
+  const cellW = W / n;
+  const r = Math.min(cellW, H * 0.3) * 0.4;
+  const cells = [];
+  for (let i = 0; i < n; i++) cells.push({ x: cellW * (i + 0.5), y: H * yFrac, r });
+  return cells;
+}
+
 /* -------------------- 5. ANIMALS & SOUNDS -------------------- */
 SCENES.animals = (function () {
   const POOL = [
@@ -1010,15 +1146,26 @@ SCENES.animals = (function () {
     { e: '🦁', name: 'Lion', sound: 'roar' }, { e: '🐔', name: 'Hen', sound: 'cluck cluck' },
     { e: '🐝', name: 'Bee', sound: 'buzz' }, { e: '🦄', name: 'Unicorn', sound: 'neigh', sfx: 'horse' }
   ];
-  let cards = [], uniBob = 0;
+  let cards = [], uniBob = 0, target = null, found = 0;
   function spawn() {
-    const shuffled = POOL.slice().sort(() => Math.random() - 0.5).slice(0, 6);
-    const cells = gridLayout(6, 0.04);
+    const n = clamp(4 + Progress.level('animals'), 4, 8);   // more animals to choose from
+    const shuffled = POOL.slice().sort(() => Math.random() - 0.5).slice(0, n);
+    const cells = gridLayout(n, 0.06);
     cards = shuffled.map((a, i) => ({ ...a, x: cells[i].x, y: cells[i].y, r: cells[i].r, ph: rand(0, 6.28), pop: 0 }));
   }
+  function newTarget(delay) {
+    target = cards[(Math.random() * cards.length) | 0];
+    setTimeout(() => { Speech.say('Can you find the ' + target.name + '?'); }, delay || 500);
+  }
+  function playSound(c) {
+    if (c.sfx === 'horse') Audio2.horse(); else Audio2.sparkle();
+  }
   return {
-    enter() { spawn(); Speech.say('Tap an animal!'); },
-    resized: spawn,
+    enter() { spawn(); found = 0; newTarget(700); },
+    resized() {
+      const cells = gridLayout(cards.length, 0.06);
+      cards.forEach((c, i) => { c.x = cells[i].x; c.y = cells[i].y; c.r = cells[i].r; });
+    },
     update(dt) { uniBob += dt; for (const c of cards) if (c.pop > 0) c.pop = Math.max(0, c.pop - dt * 2); },
     draw() {
       drawBg(performance.now() / 1000, '#2a5a3a', '#4ab070');
@@ -1042,12 +1189,17 @@ SCENES.animals = (function () {
         if (Math.abs(x - c.x) < c.r * 1.1 && Math.abs(y - c.y) < c.r * 1.1) {
           c.pop = 1;
           sparkleBurst(c.x, c.y, pick(SPARKLE_COLORS), 14);
-          if (c.sfx === 'horse') {
-            // play the real neigh; the spoken sound word would be redundant
-            Audio2.horse();
+          playSound(c);
+          if (c === target) {
+            // she found the one that was asked for
+            Speech.say(c.name + '! Yes! Well done!');
+            confetti(); cheer();
+            found++; Progress.up('animals');
+            if (found % 4 === 0) { setTimeout(() => { spawn(); newTarget(400); }, 1600); }
+            else { newTarget(1500); }
+          } else if (c.sfx === 'horse') {
             Speech.say(c.name + '! Neigh!');
           } else {
-            Audio2.sparkle();
             Speech.say(c.name + '! The ' + c.name.toLowerCase() + ' says ' + c.sound + '.');
           }
           return;
@@ -1066,21 +1218,32 @@ SCENES.letters = (function () {
     U: 'Unicorn', V: 'Violin', W: 'Water', X: 'Xylophone', Y: 'Yoyo', Z: 'Zebra'
   };
   const KEYS = Object.keys(WORDS);
-  let bubbles = [], spawnT = 0, uniBob = 0;
+  let bubbles = [], spawnT = 0, uniBob = 0, target = null, correct = 0, level = 0;
+  function newTarget() {
+    target = KEYS[(Math.random() * KEYS.length) | 0];
+    Speech.say('Find the letter ' + target + '!');
+  }
   function addBubble() {
-    const k = KEYS[(Math.random() * KEYS.length) | 0];
+    // bias some bubbles toward the target letter so it is always findable
+    const k = (target && Math.random() < 0.45) ? target : KEYS[(Math.random() * KEYS.length) | 0];
     const r = S() * 0.1;
+    const sp = 1 + level * 0.06;
     bubbles.push({
       x: rand(r * 1.2, W - r * 1.2), y: H + r,
-      vy: -rand(0.45, 0.9) * (S() / 600), r, key: k, color: pick(RAINBOW),
+      vy: -rand(0.45, 0.9) * (S() / 600) * sp, r, key: k, color: pick(RAINBOW),
       sway: rand(0, 6.28), pop: 0
     });
   }
   return {
-    enter() { bubbles = []; spawnT = 0; for (let i = 0; i < 3; i++) addBubble(); Speech.say('Tap the letters!'); },
+    enter() {
+      bubbles = []; spawnT = 0; correct = 0; level = Progress.level('letters');
+      newTarget(); for (let i = 0; i < 3; i++) addBubble();
+    },
     update(dt) {
       uniBob += dt; spawnT += dt;
-      if (spawnT > 1.4 && bubbles.length < 5) { spawnT = 0; addBubble(); }
+      const maxB = clamp(4 + level, 4, 7);
+      const interval = clamp(1.4 - level * 0.1, 0.6, 1.4);
+      if (spawnT > interval && bubbles.length < maxB) { spawnT = 0; addBubble(); }
       for (let i = bubbles.length - 1; i >= 0; i--) {
         const b = bubbles[i];
         b.y += b.vy * dt * 60;
@@ -1108,6 +1271,19 @@ SCENES.letters = (function () {
         ctx.fillText(b.key, b.x, b.y + b.r * 0.05);
         ctx.globalAlpha = 1;
       }
+      // target badge: the letter to find, shown top-centre
+      if (target) {
+        const bx = W / 2, by = S() * 0.1, br = S() * 0.07;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.beginPath(); ctx.arc(bx, by, br, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = '#7b5cff';
+        ctx.font = 'bold ' + (br * 1.1) + "px 'Comic Sans MS', sans-serif";
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(target, bx, by + br * 0.05);
+      }
       drawParticles();
       drawHomeButton();
     },
@@ -1116,9 +1292,18 @@ SCENES.letters = (function () {
       for (const b of bubbles) {
         if (b.pop === 0 && dist2(x, y, b.x, b.y) < (b.r * 1.1) * (b.r * 1.1)) {
           b.pop = 0.001;
-          Audio2.sparkle();
           sparkleBurst(b.x, b.y, b.color, 14);
-          Speech.say(b.key + '. ' + b.key + ' is for ' + WORDS[b.key] + '.');
+          if (b.key === target) {
+            Audio2.sparkle();
+            Speech.say('Yes! ' + target + '! ' + target + ' is for ' + WORDS[target] + '!');
+            confetti(); cheer();
+            correct++;
+            if (correct % 3 === 0) { Progress.up('letters'); level = Progress.level('letters'); }
+            setTimeout(newTarget, 1300);
+          } else {
+            Audio2.pop();
+            Speech.say(b.key + '. ' + b.key + ' is for ' + WORDS[b.key] + '.');
+          }
           return;
         }
       }
@@ -1131,15 +1316,19 @@ SCENES.jigsaw = (function () {
   let slots = [], pieces = [], held = null, offx = 0, offy = 0, uniBob = 0, locked = false, timer = 0;
   function spawn() {
     locked = false;
-    const chosen = SHAPES.slice().sort(() => Math.random() - 0.5).slice(0, 3);
-    const slotCells = gridLayout(3, 0.06);          // silhouettes up top
-    slots = chosen.map((sh, i) => ({ def: sh, x: slotCells[i].x, y: slotCells[i].y * 0.85, r: slotCells[i].r, filled: false }));
-    // pieces scattered along the lower third, shuffled order
-    const order = [0, 1, 2].sort(() => Math.random() - 0.5);
-    const py = H * 0.82;
+    const level = Progress.level('jigsaw');
+    const n = clamp(3 + level, 3, SHAPES.length);           // 3 -> 5 pieces
+    const uniform = level >= 2 ? '#c7a8ff' : null;          // higher levels: match by shape only
+    const chosen = SHAPES.slice().sort(() => Math.random() - 0.5).slice(0, n)
+      .map(sh => uniform ? { ...sh, color: uniform } : sh);
+    const slotCells = rowLayout(n, 0.28);                   // a tidy row of homes up top
+    slots = chosen.map((sh, i) => ({ def: sh, x: slotCells[i].x, y: slotCells[i].y, r: slotCells[i].r, filled: false }));
+    // pieces in a shuffled row along the bottom
+    const order = chosen.map((_, i) => i).sort(() => Math.random() - 0.5);
+    const pieceCells = rowLayout(n, 0.8);
     pieces = order.map((slotIndex, k) => ({
       slotIndex, def: chosen[slotIndex],
-      x: W * (0.25 + k * 0.25), y: py, hx: W * (0.25 + k * 0.25), hy: py,
+      x: pieceCells[k].x, y: pieceCells[k].y, hx: pieceCells[k].x, hy: pieceCells[k].y,
       r: slots[0].r, placed: false
     }));
     Speech.say('Drag the shapes to their homes!');
@@ -1203,6 +1392,7 @@ SCENES.jigsaw = (function () {
         Speech.say(p.def.word + '!');
         if (slots.every(sl => sl.filled)) {
           locked = true; timer = 0;
+          Progress.up('jigsaw');
           setTimeout(() => { Speech.say('You did it! Hooray!'); Audio2.success(); confetti(); cheer(); }, 500);
         }
       } else {
@@ -1225,9 +1415,10 @@ SCENES.findcolor = (function () {
   function ask() { Speech.say('Find the ' + target.w + ' one!'); }
   function spawn() {
     locked = false; wrong = null;
-    const chosen = PALETTE.slice().sort(() => Math.random() - 0.5).slice(0, 4);
+    const n = clamp(3 + Progress.level('findcolor'), 3, 6);   // more colours to tell apart
+    const chosen = PALETTE.slice().sort(() => Math.random() - 0.5).slice(0, n);
     target = chosen[(Math.random() * chosen.length) | 0];
-    const cells = gridLayout(4, 0.34);
+    const cells = gridLayout(n, 0.34);
     items = chosen.map((col, i) => ({ ...col, x: cells[i].x, y: cells[i].y, r: cells[i].r, ph: rand(0, 6.28), shake: 0 }));
     setTimeout(ask, 350);
   }
@@ -1269,6 +1460,7 @@ SCENES.findcolor = (function () {
         if (Math.abs(x - it.x) < it.r * 1.1 && Math.abs(y - it.y) < it.r * 1.3) {
           if (it.c === target.c) {
             locked = true; timer = 0;
+            Progress.up('findcolor');
             sparkleBurst(it.x, it.y, it.c, 20);
             Audio2.success(); confetti(); cheer();
             Speech.say('Yes! ' + target.w + '! Well done!');
