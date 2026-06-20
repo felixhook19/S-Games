@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#7b5cff">
+<title>Unicorn Magic</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    overflow: hidden; background: #2a1a5e;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: none; overscroll-behavior: none;
+    font-family: 'Comic Sans MS', 'Trebuchet MS', system-ui, sans-serif;
+  }
+  #game { display: block; width: 100vw; height: 100vh; }
+  /* First-tap gate so audio is allowed to start (mobile browsers require a gesture) */
+  #start {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; z-index: 10;
+    background: radial-gradient(circle at 50% 35%, #6a4bd0 0%, #3a2080 60%, #2a1a5e 100%);
+    color: #fff; text-align: center; cursor: pointer;
+  }
+  #start h1 { font-size: 13vw; margin: 0; text-shadow: 0 4px 0 #4a2fa0; }
+  #start .uni { font-size: 30vw; line-height: 1; animation: bob 2s ease-in-out infinite; }
+  #start p { font-size: 5vw; opacity: 0.9; }
+  @keyframes bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-4vw)} }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<div id="start">
+  <div class="uni">🦄</div>
+  <h1>Unicorn Magic</h1>
+  <p>Tap to play! ✨</p>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   UNICORN MAGIC  —  an offline, no-reading-required learning game
+   for a 3 year old who loves unicorns.
+
+   One self-contained file. No internet, no servers, no assets to load.
+   Graphics are drawn with vectors. Sounds are synthesised live.
+   Spoken words use the device's built-in voice (works offline on Android).
+
+   Activities (all endless, no losing, lots of praise):
+     1. Counting Stars   -> numbers 1..10
+     2. Colour the Unicorn -> colour names
+     3. Shape Bubbles    -> shape names
+     4. Rainbow Music    -> cause & effect + a happy pentatonic scale
+   ===================================================================== */
+
+/* -------------------- Canvas & global sizing -------------------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2.5);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  canvas.width = Math.floor(W * DPR);
+  canvas.height = Math.floor(H * DPR);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* Short side, used to scale everything so it looks right on any screen. */
+function S() { return Math.min(W, H); }
+
+/* -------------------- Audio: gentle synthesised sounds -------------------- */
+const Audio2 = (function () {
+  let ac = null;
+  function ctxOf() {
+    if (!ac) {
+      try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (e) { ac = null; }
+    }
+    if (ac && ac.state === 'suspended') ac.resume();
+    return ac;
+  }
+  // A single soft tone with an envelope.
+  function tone(freq, dur, type, vol, when) {
+    const a = ctxOf(); if (!a) return;
+    const t0 = (when || a.currentTime);
+    const o = a.createOscillator();
+    const g = a.createGain();
+    o.type = type || 'sine';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(vol || 0.25, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(a.destination);
+    o.start(t0); o.stop(t0 + dur + 0.05);
+  }
+  // Pleasant C-major pentatonic so everything sounds happy.
+  const PENT = [523.25, 587.33, 659.25, 783.99, 880.0, 1046.5];
+  return {
+    unlock() { ctxOf(); },
+    note(i, vol) { tone(PENT[((i % PENT.length) + PENT.length) % PENT.length], 0.6, 'triangle', vol || 0.3); },
+    sparkle() {
+      const a = ctxOf(); if (!a) return;
+      const base = a.currentTime;
+      [880, 1175, 1568].forEach((f, k) => tone(f, 0.18, 'sine', 0.18, base + k * 0.05));
+    },
+    pop() {
+      const a = ctxOf(); if (!a) return;
+      const o = a.createOscillator(), g = a.createGain(), t0 = a.currentTime;
+      o.type = 'sine';
+      o.frequency.setValueAtTime(700, t0);
+      o.frequency.exponentialRampToValueAtTime(180, t0 + 0.12);
+      g.gain.setValueAtTime(0.3, t0);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+      o.connect(g); g.connect(a.destination);
+      o.start(t0); o.stop(t0 + 0.18);
+    },
+    success() {
+      const a = ctxOf(); if (!a) return;
+      const base = a.currentTime;
+      [523.25, 659.25, 783.99, 1046.5].forEach((f, k) =>
+        tone(f, 0.5, 'triangle', 0.28, base + k * 0.11));
+    },
+    tap() { tone(660, 0.12, 'sine', 0.18); }
+  };
+})();
+
+/* -------------------- Speech: spoken words (offline TTS) -------------------- */
+const Speech = (function () {
+  const ok = ('speechSynthesis' in window);
+  let voice = null;
+  function pick() {
+    if (!ok) return;
+    const vs = window.speechSynthesis.getVoices();
+    if (!vs.length) return;
+    // Prefer an English voice; a female/child-ish one if present.
+    voice = vs.find(v => /en[-_]/i.test(v.lang) && /female|woman|girl|samantha|google uk english female|zira/i.test(v.name))
+         || vs.find(v => /^en/i.test(v.lang))
+         || vs[0];
+  }
+  if (ok) { pick(); window.speechSynthesis.onvoiceschanged = pick; }
+  return {
+    ok,
+    say(text) {
+      if (!ok) return;
+      try {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(text);
+        if (voice) u.voice = voice;
+        u.rate = 0.9; u.pitch = 1.25; u.volume = 1.0;
+        window.speechSynthesis.speak(u);
+      } catch (e) {}
+    }
+  };
+})();
+
+/* -------------------- Tiny helpers -------------------- */
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+const dist2 = (ax, ay, bx, by) => { const dx = ax - bx, dy = ay - by; return dx * dx + dy * dy; };
+function rrect(c, x, y, w, h, r) {
+  c.beginPath();
+  c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r);
+  c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r);
+  c.arcTo(x, y, x + w, y, r);
+  c.closePath();
+}
+
+/* -------------------- Particles (sparkles & confetti) -------------------- */
+const particles = [];
+function sparkleBurst(x, y, color, count) {
+  for (let i = 0; i < (count || 14); i++) {
+    const a = rand(0, Math.PI * 2), sp = rand(0.5, 4) * (S() / 380);
+    particles.push({
+      x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1,
+      life: 1, decay: rand(0.012, 0.03),
+      size: rand(3, 8) * (S() / 380), color: color || pick(SPARKLE_COLORS), star: Math.random() < 0.6
+    });
+  }
+}
+function confetti() {
+  for (let i = 0; i < 90; i++) {
+    particles.push({
+      x: rand(0, W), y: rand(-H * 0.3, 0),
+      vx: rand(-1.5, 1.5), vy: rand(2, 6),
+      life: 1, decay: rand(0.004, 0.01),
+      size: rand(6, 13) * (S() / 380), color: pick(SPARKLE_COLORS),
+      star: Math.random() < 0.5, spin: rand(-0.2, 0.2), rot: rand(0, 6.28)
+    });
+  }
+}
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx * dt * 60 / 16;
+    p.y += p.vy * dt * 60 / 16;
+    p.vy += 0.12 * dt * 60 / 16;
+    if (p.rot !== undefined) p.rot += p.spin;
+    p.life -= p.decay * dt * 60 / 16;
+    if (p.life <= 0 || p.y > H + 40) particles.splice(i, 1);
+  }
+}
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = clamp(p.life, 0, 1);
+    if (p.star) drawStar(p.x, p.y, p.size, p.color, p.rot || 0);
+    else { ctx.fillStyle = p.color; ctx.beginPath(); ctx.arc(p.x, p.y, p.size, 0, 6.2832); ctx.fill(); }
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* -------------------- Shape drawing -------------------- */
+const SPARKLE_COLORS = ['#ffd1f0', '#fff4b8', '#bdf0ff', '#d6c2ff', '#c8ffd4', '#ffd0a8'];
+const RAINBOW = ['#ff5d8f', '#ff9b54', '#ffd23f', '#7bd66b', '#4ec3f7', '#9b7bff', '#ff8ad8'];
+const COLOR_WORDS = {
+  '#ff5d8f': 'pink', '#ff4d4d': 'red', '#ff9b54': 'orange', '#ffd23f': 'yellow',
+  '#7bd66b': 'green', '#4ec3f7': 'blue', '#9b7bff': 'purple', '#ff8ad8': 'pink'
+};
+function pick(arr) { return arr[(Math.random() * arr.length) | 0]; }
+
+function drawStar(x, y, r, color, rot) {
+  ctx.save();
+  ctx.translate(x, y); ctx.rotate(rot || 0);
+  ctx.beginPath();
+  for (let i = 0; i < 10; i++) {
+    const ang = Math.PI / 5 * i - Math.PI / 2;
+    const rr = i % 2 === 0 ? r : r * 0.45;
+    ctx.lineTo(Math.cos(ang) * rr, Math.sin(ang) * rr);
+  }
+  ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function drawHeart(x, y, r, color) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(r / 16, r / 16);
+  ctx.beginPath();
+  ctx.moveTo(0, 12);
+  ctx.bezierCurveTo(-14, -2, -10, -16, 0, -7);
+  ctx.bezierCurveTo(10, -16, 14, -2, 0, 12);
+  ctx.closePath();
+  ctx.fillStyle = color; ctx.fill();
+  ctx.restore();
+}
+function drawTriangle(x, y, r, color) {
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) {
+    const a = -Math.PI / 2 + i * 2 * Math.PI / 3;
+    ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+  }
+  ctx.closePath(); ctx.fillStyle = color; ctx.fill();
+}
+function drawShape(kind, x, y, r, color) {
+  ctx.fillStyle = color;
+  if (kind === 'circle') { ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill(); }
+  else if (kind === 'square') { rrect(ctx, x - r, y - r, r * 2, r * 2, r * 0.25); ctx.fill(); }
+  else if (kind === 'triangle') drawTriangle(x, y, r * 1.15, color);
+  else if (kind === 'star') drawStar(x, y, r * 1.1, color, 0);
+  else if (kind === 'heart') drawHeart(x, y, r * 1.2, color);
+}
+const SHAPES = [
+  { kind: 'circle', word: 'circle', color: '#4ec3f7' },
+  { kind: 'square', word: 'square', color: '#7bd66b' },
+  { kind: 'triangle', word: 'triangle', color: '#ff9b54' },
+  { kind: 'star', word: 'star', color: '#ffd23f' },
+  { kind: 'heart', word: 'heart', color: '#ff5d8f' }
+];
+
+/* -------------------- The Unicorn -------------------- */
+/* Draws a cute round unicorn centred at (x,y). scale ~ body radius.
+   maneColors: array used for the mane/tail stripes (greys = not coloured yet). */
+function drawUnicorn(x, y, scale, opts) {
+  opts = opts || {};
+  const mane = opts.mane || RAINBOW;
+  const bodyColor = opts.body || '#fff7fb';
+  const happy = opts.happy || 0; // 0..1 extra cheer
+  ctx.save();
+  ctx.translate(x, y);
+  const s = scale / 100; // design units of ~100
+
+  // Tail
+  ctx.save();
+  ctx.translate(-70 * s, 10 * s);
+  for (let i = 0; i < 6; i++) {
+    ctx.fillStyle = mane[i % mane.length];
+    ctx.beginPath();
+    ctx.ellipse(-i * 6 * s, i * 9 * s + Math.sin(i) * 4 * s, 16 * s, 26 * s, -0.5 - i * 0.08, 0, 6.2832);
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // Legs
+  ctx.fillStyle = bodyColor;
+  [[-28, 1], [22, 1]].forEach(([lx]) => {
+    rrect(ctx, (lx - 9) * s, 38 * s, 20 * s, 46 * s, 10 * s); ctx.fill();
+  });
+  // Hooves
+  ctx.fillStyle = '#e9b8ff';
+  [[-28], [22]].forEach(([lx]) => { rrect(ctx, (lx - 9) * s, 74 * s, 20 * s, 12 * s, 6 * s); ctx.fill(); });
+
+  // Body
+  ctx.fillStyle = bodyColor;
+  ctx.beginPath();
+  ctx.ellipse(-8 * s, 18 * s, 64 * s, 48 * s, 0, 0, 6.2832);
+  ctx.fill();
+
+  // Head
+  ctx.beginPath();
+  ctx.ellipse(58 * s, -20 * s, 40 * s, 36 * s, 0.2, 0, 6.2832);
+  ctx.fill();
+  // Snout
+  ctx.beginPath();
+  ctx.ellipse(86 * s, -2 * s, 22 * s, 18 * s, 0.2, 0, 6.2832);
+  ctx.fill();
+
+  // Ear
+  ctx.beginPath();
+  ctx.moveTo(44 * s, -50 * s); ctx.lineTo(56 * s, -36 * s); ctx.lineTo(38 * s, -34 * s);
+  ctx.closePath(); ctx.fill();
+
+  // Horn (rainbow spiral)
+  ctx.save();
+  ctx.translate(70 * s, -52 * s); ctx.rotate(0.35);
+  const hornH = 52 * s, hornW = 15 * s;
+  const hg = ctx.createLinearGradient(0, 0, 0, -hornH);
+  hg.addColorStop(0, '#ffe36e'); hg.addColorStop(1, '#ffb3e6');
+  ctx.fillStyle = hg;
+  ctx.beginPath();
+  ctx.moveTo(-hornW / 2, 0); ctx.lineTo(hornW / 2, 0); ctx.lineTo(0, -hornH); ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(255,150,220,0.8)'; ctx.lineWidth = 3 * s;
+  for (let i = 1; i <= 4; i++) {
+    const yy = -hornH * i / 5, ww = hornW * (1 - i / 5) / 2;
+    ctx.beginPath(); ctx.moveTo(-ww, yy + 4 * s); ctx.lineTo(ww, yy - 4 * s); ctx.stroke();
+  }
+  ctx.restore();
+
+  // Mane (rainbow stripes along the neck/head)
+  for (let i = 0; i < 6; i++) {
+    ctx.fillStyle = mane[i % mane.length];
+    ctx.beginPath();
+    ctx.ellipse((30 - i * 12) * s, (-30 + i * 6) * s, 18 * s, 26 * s, 0.4, 0, 6.2832);
+    ctx.fill();
+  }
+
+  // Eye
+  ctx.fillStyle = '#3a2a55';
+  ctx.beginPath();
+  ctx.ellipse(64 * s, -22 * s, 6 * s, (8 - happy * 3) * s, 0, 0, 6.2832);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath(); ctx.arc(66 * s, -25 * s, 2.4 * s, 0, 6.2832); ctx.fill();
+  // Eyelashes
+  ctx.strokeStyle = '#3a2a55'; ctx.lineWidth = 2 * s; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(70 * s, -28 * s); ctx.lineTo(75 * s, -31 * s); ctx.stroke();
+
+  // Cheek
+  ctx.fillStyle = 'rgba(255,140,200,0.4)';
+  ctx.beginPath(); ctx.arc(74 * s, -6 * s, 9 * s, 0, 6.2832); ctx.fill();
+
+  // Smile
+  ctx.strokeStyle = '#c98bb0'; ctx.lineWidth = 2.5 * s;
+  ctx.beginPath(); ctx.arc(88 * s, -2 * s, 7 * s, 0.2, 1.4); ctx.stroke();
+
+  // Nostril
+  ctx.fillStyle = '#d8a0c8';
+  ctx.beginPath(); ctx.arc(94 * s, -6 * s, 2 * s, 0, 6.2832); ctx.fill();
+
+  ctx.restore();
+}
+
+/* -------------------- Background -------------------- */
+let bgStars = [];
+function seedBg() {
+  bgStars = [];
+  const n = 40;
+  for (let i = 0; i < n; i++) {
+    bgStars.push({ x: Math.random(), y: Math.random() * 0.75, r: rand(1, 3), tw: rand(0, 6.28), sp: rand(1, 3) });
+  }
+}
+seedBg();
+window.addEventListener('resize', seedBg);
+
+function drawBg(t, topA, topB) {
+  const g = ctx.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, topA || '#3a2080');
+  g.addColorStop(0.6, topB || '#6a4bd0');
+  g.addColorStop(1, '#a87bff');
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  // twinkly stars
+  for (const s of bgStars) {
+    const tw = 0.5 + 0.5 * Math.sin(t * s.sp + s.tw);
+    ctx.globalAlpha = 0.4 + 0.6 * tw;
+    drawStar(s.x * W, s.y * H, s.r + tw * 1.5, '#fff8dc', t * 0.2);
+  }
+  ctx.globalAlpha = 1;
+  // soft hills at the bottom
+  ctx.fillStyle = '#caa0ff';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.quadraticCurveTo(W * 0.25, H * 0.82, W * 0.5, H * 0.9);
+  ctx.quadraticCurveTo(W * 0.75, H * 0.98, W, H * 0.86);
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#e0c2ff';
+  ctx.beginPath();
+  ctx.moveTo(0, H);
+  ctx.quadraticCurveTo(W * 0.3, H * 0.95, W * 0.6, H * 0.97);
+  ctx.quadraticCurveTo(W * 0.85, H * 0.99, W, H * 0.95);
+  ctx.lineTo(W, H); ctx.closePath(); ctx.fill();
+}
+
+/* -------------------- Home button (house icon) -------------------- */
+function homeButton() {
+  const r = S() * 0.07;
+  const x = r * 1.2, y = r * 1.2;
+  return { x, y, r };
+}
+function drawHomeButton() {
+  const b = homeButton();
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 6.2832); ctx.fill();
+  // little house
+  const s = b.r * 0.55;
+  ctx.fillStyle = '#7b5cff';
+  ctx.beginPath();
+  ctx.moveTo(b.x, b.y - s);          // roof peak
+  ctx.lineTo(b.x + s, b.y);
+  ctx.lineTo(b.x + s * 0.6, b.y);
+  ctx.lineTo(b.x + s * 0.6, b.y + s * 0.7);
+  ctx.lineTo(b.x - s * 0.6, b.y + s * 0.7);
+  ctx.lineTo(b.x - s * 0.6, b.y);
+  ctx.lineTo(b.x - s, b.y);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function hitHome(x, y) {
+  const b = homeButton();
+  return dist2(x, y, b.x, b.y) < b.r * b.r;
+}
+
+/* Big celebratory label that fades — but visual, with stars, not relied-on text. */
+let bigCheer = null;
+function cheer(emojiLikeStars) {
+  bigCheer = { t: 0 };
+}
+function drawCheer(dt) {
+  if (!bigCheer) return;
+  bigCheer.t += dt;
+  const a = bigCheer.t < 0.3 ? bigCheer.t / 0.3 : clamp(1 - (bigCheer.t - 1.4) / 0.6, 0, 1);
+  if (bigCheer.t > 2) { bigCheer = null; return; }
+  ctx.save();
+  ctx.globalAlpha = a;
+  ctx.translate(W / 2, H * 0.3);
+  const sc = 0.7 + 0.3 * Math.min(1, bigCheer.t * 3);
+  ctx.scale(sc, sc);
+  // a ring of stars
+  for (let i = 0; i < 7; i++) {
+    const ang = i / 7 * 6.2832 + bigCheer.t * 2;
+    drawStar(Math.cos(ang) * S() * 0.16, Math.sin(ang) * S() * 0.16, S() * 0.035, RAINBOW[i % RAINBOW.length], bigCheer.t * 3);
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
+/* =====================================================================
+   SCENE MANAGER
+   ===================================================================== */
+let scene = null;
+let sceneName = '';
+function setScene(name) {
+  sceneName = name;
+  scene = SCENES[name];
+  if (scene && scene.enter) scene.enter();
+}
+
+/* -------------------- HOME / MENU -------------------- */
+const SCENES = {};
+
+SCENES.home = (function () {
+  let buttons = [];
+  let uniBob = 0;
+  function layout() {
+    // four big activity bubbles in a 2x2 grid below the unicorn
+    const cx = W / 2;
+    const gridY = H * 0.62;
+    const gap = S() * 0.27;
+    const r = S() * 0.12;
+    const defs = [
+      { id: 'counting', color: '#ffd23f', label: 'count' },
+      { id: 'colors', color: '#ff5d8f', label: 'colour' },
+      { id: 'shapes', color: '#4ec3f7', label: 'shapes' },
+      { id: 'music', color: '#7bd66b', label: 'music' }
+    ];
+    buttons = defs.map((d, i) => {
+      const col = i % 2, row = (i / 2) | 0;
+      return { ...d, x: cx + (col - 0.5) * gap, y: gridY + (row - 0.4) * gap, r };
+    });
+  }
+  function drawIcon(b) {
+    const x = b.x, y = b.y, r = b.r;
+    if (b.id === 'counting') {
+      drawStar(x - r * 0.35, y - r * 0.1, r * 0.32, '#fff', 0);
+      drawStar(x + r * 0.35, y - r * 0.15, r * 0.28, '#fff8dc', 0.5);
+      drawStar(x, y + r * 0.4, r * 0.26, '#fff', 1);
+    } else if (b.id === 'colors') {
+      // rainbow arcs
+      for (let i = 0; i < 4; i++) {
+        ctx.strokeStyle = RAINBOW[i]; ctx.lineWidth = r * 0.16;
+        ctx.beginPath(); ctx.arc(x, y + r * 0.35, r * (0.28 + i * 0.18), Math.PI, 0); ctx.stroke();
+      }
+    } else if (b.id === 'shapes') {
+      drawShape('circle', x - r * 0.35, y - r * 0.2, r * 0.26, '#fff');
+      drawShape('square', x + r * 0.32, y - r * 0.22, r * 0.24, '#fff8dc');
+      drawTriangle(x, y + r * 0.4, r * 0.34, '#fff');
+    } else if (b.id === 'music') {
+      ctx.fillStyle = '#fff';
+      // music note
+      ctx.beginPath(); ctx.arc(x - r * 0.2, y + r * 0.3, r * 0.22, 0, 6.2832); ctx.fill();
+      ctx.beginPath(); ctx.arc(x + r * 0.35, y + r * 0.12, r * 0.22, 0, 6.2832); ctx.fill();
+      ctx.fillRect(x - r * 0.02, y - r * 0.45, r * 0.12, r * 0.78);
+      ctx.fillRect(x + r * 0.45, y - r * 0.45, r * 0.12, r * 0.6);
+      ctx.fillRect(x - r * 0.02, y - r * 0.45, r * 0.59, r * 0.14);
+    }
+  }
+  return {
+    enter() { layout(); Speech.say('Unicorn Magic. Pick a game!'); },
+    resized: layout,
+    update(dt) { uniBob += dt; },
+    draw() {
+      drawBg(performance.now() / 1000, '#5a3aa8', '#8a6ae0');
+      // Title sparkle band
+      const uy = H * 0.27 + Math.sin(uniBob * 1.6) * S() * 0.012;
+      drawUnicorn(W / 2, uy, S() * 0.16, { mane: RAINBOW });
+      // bubbles
+      for (const b of buttons) {
+        const pulse = 1 + Math.sin(uniBob * 2 + b.x) * 0.03;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 18; ctx.shadowOffsetY = 6;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * pulse, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        // glossy highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.25)';
+        ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.4, 0, 6.2832); ctx.fill();
+        drawIcon(b);
+      }
+      drawParticles();
+    },
+    pointerDown(x, y) {
+      for (const b of buttons) {
+        if (dist2(x, y, b.x, b.y) < b.r * b.r) {
+          Audio2.sparkle();
+          sparkleBurst(b.x, b.y, '#fff', 18);
+          setScene(b.id);
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 1. COUNTING STARS -------------------- */
+SCENES.counting = (function () {
+  let stars = [], target = 3, counted = 0, locked = false, timer = 0, uniBob = 0;
+  const NUM_WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+  function spawn() {
+    stars = [];
+    counted = 0; locked = false;
+    const r = S() * 0.075;
+    const margin = r * 1.4;
+    for (let i = 0; i < target; i++) {
+      let x, y, tries = 0;
+      do {
+        x = rand(margin, W - margin);
+        y = rand(H * 0.28, H * 0.85);
+        tries++;
+      } while (tries < 30 && stars.some(s => dist2(x, y, s.x, s.y) < (r * 2.3) * (r * 2.3)));
+      stars.push({ x, y, r, got: false, ph: rand(0, 6.28), color: RAINBOW[i % RAINBOW.length], pop: 0 });
+    }
+    Speech.say('Can you find ' + NUM_WORDS[target] + ' stars? Tap them!');
+  }
+  return {
+    enter() { target = 3; spawn(); },
+    update(dt) {
+      uniBob += dt;
+      for (const s of stars) if (s.pop > 0) s.pop = Math.max(0, s.pop - dt * 3);
+      if (locked) {
+        timer += dt;
+        if (timer > 2.2) { timer = 0; target = target >= 10 ? 3 : target + 1; spawn(); }
+      }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#2a2060', '#4a3aa0');
+      // The unicorn cheering at the top, with as many lit stars as counted
+      drawUnicorn(W * 0.5, H * 0.16, S() * 0.1, { mane: RAINBOW, happy: counted / Math.max(1, target) });
+      // progress pips (lit vs unlit stars) along the top
+      const pipR = S() * 0.022, py = H * 0.30;
+      const totalW = target * pipR * 2.6;
+      for (let i = 0; i < target; i++) {
+        const px = W / 2 - totalW / 2 + pipR * 1.3 + i * pipR * 2.6;
+        drawStar(px, py, pipR, i < counted ? '#ffd23f' : 'rgba(255,255,255,0.25)', 0);
+      }
+      // the tappable stars
+      for (const s of stars) {
+        if (s.got) continue;
+        const wob = Math.sin(uniBob * 2 + s.ph) * S() * 0.01;
+        const sc = 1 + s.pop * 0.5;
+        ctx.save(); ctx.shadowColor = s.color; ctx.shadowBlur = 20;
+        drawStar(s.x, s.y + wob, s.r * sc, s.color, uniBob * 0.5 + s.ph);
+        ctx.restore();
+      }
+      drawParticles();
+      drawCheer();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      if (locked) return;
+      for (const s of stars) {
+        if (!s.got && dist2(x, y, s.x, s.y) < (s.r * 1.3) * (s.r * 1.3)) {
+          s.got = true; s.pop = 1; counted++;
+          sparkleBurst(s.x, s.y, s.color, 16);
+          Audio2.note(counted - 1, 0.32);
+          Speech.say(NUM_WORDS[counted]);
+          if (counted >= target) {
+            locked = true; timer = 0;
+            setTimeout(() => {
+              Speech.say(NUM_WORDS[target] + ' stars! Hooray!');
+              Audio2.success(); confetti(); cheer();
+            }, 650);
+          }
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 2. COLOUR THE UNICORN -------------------- */
+SCENES.colors = (function () {
+  // The unicorn's mane/tail/horn start grey. Tap a paint blob to colour
+  // the next part and hear the colour name.
+  const PARTS = 6;
+  let filled = [];      // colour per mane slot, null = grey
+  let blobs = [];
+  let uniBob = 0, locked = false, timer = 0;
+  const PALETTE = ['#ff5d8f', '#ff9b54', '#ffd23f', '#7bd66b', '#4ec3f7', '#9b7bff'];
+  function layoutBlobs() {
+    blobs = [];
+    const r = S() * 0.072;
+    const n = PALETTE.length;
+    const totalW = n * r * 2.4;
+    for (let i = 0; i < n; i++) {
+      blobs.push({
+        x: W / 2 - totalW / 2 + r * 1.2 + i * r * 2.4,
+        y: H * 0.86, r, color: PALETTE[i], ph: rand(0, 6.28), pop: 0
+      });
+    }
+  }
+  function reset() {
+    filled = new Array(PARTS).fill(null);
+    locked = false;
+    Speech.say('Tap a colour to paint the unicorn!');
+  }
+  function curMane() {
+    // greys where not filled
+    return filled.map((c, i) => c || (i % 2 ? '#c9c4d6' : '#b8b2c8'));
+  }
+  return {
+    enter() { layoutBlobs(); reset(); },
+    resized: layoutBlobs,
+    update(dt) {
+      uniBob += dt;
+      for (const b of blobs) if (b.pop > 0) b.pop = Math.max(0, b.pop - dt * 3);
+      if (locked) { timer += dt; if (timer > 2.4) { timer = 0; reset(); } }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#3a2a6a', '#7a5ad0');
+      const uy = H * 0.42 + Math.sin(uniBob * 1.5) * S() * 0.012;
+      drawUnicorn(W / 2, uy, S() * 0.2, { mane: curMane(), happy: locked ? 1 : 0 });
+      // paint blobs
+      for (const b of blobs) {
+        const sc = 1 + Math.sin(uniBob * 2 + b.ph) * 0.04 + b.pop * 0.4;
+        ctx.save(); ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 14; ctx.shadowOffsetY = 5;
+        ctx.fillStyle = b.color;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = 'rgba(255,255,255,0.3)';
+        ctx.beginPath(); ctx.arc(b.x - b.r * 0.3, b.y - b.r * 0.35, b.r * 0.35, 0, 6.2832); ctx.fill();
+      }
+      drawParticles();
+      drawCheer();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      if (locked) return;
+      for (const b of blobs) {
+        if (dist2(x, y, b.x, b.y) < (b.r * 1.2) * (b.r * 1.2)) {
+          b.pop = 1;
+          const slot = filled.indexOf(null);
+          if (slot >= 0) {
+            filled[slot] = b.color;
+            sparkleBurst(W / 2, H * 0.42, b.color, 18);
+            Audio2.note(slot, 0.3);
+            Speech.say(COLOR_WORDS[b.color] || 'colour');
+            if (filled.indexOf(null) < 0) {
+              locked = true; timer = 0;
+              setTimeout(() => { Speech.say('So pretty! Hooray!'); Audio2.success(); confetti(); cheer(); }, 600);
+            }
+          }
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 3. SHAPE BUBBLES -------------------- */
+SCENES.shapes = (function () {
+  let bubbles = [], spawnT = 0, uniBob = 0;
+  function addBubble() {
+    const def = SHAPES[(Math.random() * SHAPES.length) | 0];
+    const r = S() * 0.085;
+    bubbles.push({
+      x: rand(r * 1.2, W - r * 1.2), y: H + r,
+      vy: -rand(0.5, 1.1) * (S() / 600), r, def,
+      sway: rand(0, 6.28), pop: 0
+    });
+  }
+  return {
+    enter() { bubbles = []; spawnT = 0; for (let i = 0; i < 3; i++) addBubble(); Speech.say('Pop the shapes!'); },
+    update(dt) {
+      uniBob += dt;
+      spawnT += dt;
+      if (spawnT > 1.3 && bubbles.length < 6) { spawnT = 0; addBubble(); }
+      for (let i = bubbles.length - 1; i >= 0; i--) {
+        const b = bubbles[i];
+        b.y += b.vy * dt * 60;
+        b.x += Math.sin(uniBob * 1.5 + b.sway) * 0.4;
+        if (b.pop > 0) { b.pop += dt * 4; if (b.pop > 1) bubbles.splice(i, 1); }
+        else if (b.y < -b.r * 2) bubbles.splice(i, 1);
+      }
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#1f3a6a', '#3a6ad0');
+      for (const b of bubbles) {
+        const sc = b.pop > 0 ? 1 + b.pop * 0.6 : 1;
+        const a = b.pop > 0 ? clamp(1 - b.pop, 0, 1) : 1;
+        ctx.globalAlpha = a;
+        // bubble shell
+        ctx.fillStyle = 'rgba(255,255,255,0.18)';
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.fill();
+        ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(b.x, b.y, b.r * sc, 0, 6.2832); ctx.stroke();
+        drawShape(b.def.kind, b.x, b.y, b.r * 0.55 * sc, b.def.color);
+        ctx.globalAlpha = 1;
+      }
+      drawParticles();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      for (const b of bubbles) {
+        if (b.pop === 0 && dist2(x, y, b.x, b.y) < (b.r * 1.1) * (b.r * 1.1)) {
+          b.pop = 0.001;
+          Audio2.pop();
+          sparkleBurst(b.x, b.y, b.def.color, 14);
+          Speech.say(b.def.word);
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* -------------------- 4. RAINBOW MUSIC -------------------- */
+SCENES.music = (function () {
+  // A rainbow xylophone of bars, each with a little unicorn head.
+  // Tapping plays a happy pentatonic note. Pure cause & effect.
+  let bars = [], uniBob = 0;
+  function layout() {
+    bars = [];
+    const n = 6;
+    const pad = S() * 0.04;
+    const bw = (W - pad * 2) / n;
+    for (let i = 0; i < n; i++) {
+      const h = H * (0.4 + i * 0.07);
+      bars.push({ x: pad + i * bw, w: bw * 0.86, h, color: RAINBOW[i], idx: i, press: 0 });
+    }
+  }
+  return {
+    enter() { layout(); Speech.say('Make some music!'); },
+    resized: layout,
+    update(dt) {
+      uniBob += dt;
+      for (const b of bars) if (b.press > 0) b.press = Math.max(0, b.press - dt * 4);
+    },
+    draw() {
+      drawBg(performance.now() / 1000, '#5a2a6a', '#a05ad0');
+      for (const b of bars) {
+        const top = H - b.h - b.press * S() * 0.02;
+        ctx.save();
+        ctx.shadowColor = 'rgba(0,0,0,0.25)'; ctx.shadowBlur = 12; ctx.shadowOffsetY = 5;
+        ctx.fillStyle = b.color;
+        rrect(ctx, b.x, top, b.w, b.h + H, S() * 0.04); ctx.fill();
+        ctx.restore();
+        // glossy stripe
+        ctx.fillStyle = 'rgba(255,255,255,0.22)';
+        rrect(ctx, b.x + b.w * 0.12, top + S() * 0.02, b.w * 0.2, b.h * 0.7, S() * 0.02); ctx.fill();
+        // little unicorn head bobbing on top
+        const hb = Math.sin(uniBob * 2 + b.idx) * S() * 0.008;
+        drawMiniUnicorn(b.x + b.w / 2, top - S() * 0.05 + hb, S() * 0.05);
+      }
+      drawParticles();
+      drawHomeButton();
+    },
+    pointerDown(x, y) {
+      if (hitHome(x, y)) { Audio2.tap(); setScene('home'); return; }
+      for (const b of bars) {
+        if (x >= b.x && x <= b.x + b.w && y >= H - b.h - S() * 0.08) {
+          b.press = 1;
+          Audio2.note(b.idx, 0.35);
+          sparkleBurst(b.x + b.w / 2, H - b.h, b.color, 10);
+          return;
+        }
+      }
+    }
+  };
+})();
+
+/* A tiny unicorn head for the music bars. */
+function drawMiniUnicorn(x, y, r) {
+  ctx.save(); ctx.translate(x, y);
+  // head
+  ctx.fillStyle = '#fff7fb';
+  ctx.beginPath(); ctx.arc(0, 0, r, 0, 6.2832); ctx.fill();
+  // ear
+  ctx.beginPath(); ctx.moveTo(-r * 0.3, -r * 0.9); ctx.lineTo(-r * 0.05, -r * 0.6); ctx.lineTo(-r * 0.55, -r * 0.55); ctx.closePath(); ctx.fill();
+  // horn
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath(); ctx.moveTo(-r * 0.12, -r * 0.8); ctx.lineTo(r * 0.12, -r * 0.8); ctx.lineTo(0, -r * 1.5); ctx.closePath(); ctx.fill();
+  // mane
+  ctx.fillStyle = '#ff8ad8';
+  ctx.beginPath(); ctx.arc(-r * 0.6, -r * 0.2, r * 0.4, 0, 6.2832); ctx.fill();
+  // eyes
+  ctx.fillStyle = '#3a2a55';
+  ctx.beginPath(); ctx.arc(-r * 0.2, 0, r * 0.12, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.arc(r * 0.35, 0, r * 0.12, 0, 6.2832); ctx.fill();
+  // cheeks
+  ctx.fillStyle = 'rgba(255,140,200,0.4)';
+  ctx.beginPath(); ctx.arc(-r * 0.35, r * 0.35, r * 0.18, 0, 6.2832); ctx.fill();
+  ctx.beginPath(); ctx.arc(r * 0.45, r * 0.35, r * 0.18, 0, 6.2832); ctx.fill();
+  ctx.restore();
+}
+
+/* =====================================================================
+   INPUT + MAIN LOOP
+   ===================================================================== */
+function getXY(e) {
+  const t = (e.touches && e.touches[0]) || (e.changedTouches && e.changedTouches[0]) || e;
+  return { x: t.clientX, y: t.clientY };
+}
+function onDown(e) {
+  e.preventDefault();
+  Audio2.unlock();
+  const { x, y } = getXY(e);
+  if (scene && scene.pointerDown) scene.pointerDown(x, y);
+}
+// pointerdown covers both touch and mouse on Chrome/Android — one listener
+// avoids each tap firing twice.
+canvas.addEventListener('pointerdown', onDown, { passive: false });
+
+window.addEventListener('resize', () => { if (scene && scene.resized) scene.resized(); });
+
+let last = performance.now();
+function loop(now) {
+  let dt = (now - last) / 1000; last = now;
+  if (dt > 0.05) dt = 0.05;
+  updateParticles(dt);
+  if (scene) { if (scene.update) scene.update(dt); if (scene.draw) scene.draw(); }
+  requestAnimationFrame(loop);
+}
+
+/* -------------------- Start gate (first user tap) -------------------- */
+const startEl = document.getElementById('start');
+function begin() {
+  startEl.removeEventListener('click', begin);
+  startEl.style.display = 'none';
+  Audio2.unlock();
+  // Warm up speech with a silent utterance so the first real word is prompt.
+  if (Speech.ok) { try { window.speechSynthesis.getVoices(); } catch (e) {} }
+  setScene('home');
+  // Try to go fullscreen for a proper app feel (ignored if not allowed).
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen().catch(() => {});
+}
+startEl.addEventListener('click', begin);
+startEl.addEventListener('touchstart', function (e) { e.preventDefault(); begin(); }, { passive: false });
+
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
