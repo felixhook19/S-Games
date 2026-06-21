@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Sky -->
+    <path android:fillColor="#0B3D2E" android:pathData="M0,0 H108 V108 H0 Z" />
+    <path android:fillColor="#13734F" android:pathData="M0,0 H108 V60 H0 Z" />
+    <!-- Rolling green -->
+    <path android:fillColor="#1E7A50" android:pathData="M0,70 Q54,52 108,70 V108 H0 Z" />
+    <path android:fillColor="#2A8F62" android:pathData="M0,84 Q54,70 108,84 V108 H0 Z" />
+</vector>

@@ -1,0 +1,9 @@
+.gradle/
+build/
+app/build/
+local.properties
+# Generated from ../clutch-golf.html at build time by the copyGame task.
+app/src/main/assets/index.html
+.idea/
+*.iml
+captures/

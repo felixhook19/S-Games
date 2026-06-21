@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Hole shadow on the green -->
+    <path android:fillColor="#0A2C20" android:fillAlpha="0.6"
+        android:pathData="M52,80 a12,5 0 1 0 24,0 a12,5 0 1 0 -24,0 Z" />
+
+    <!-- Flag pole -->
+    <path android:fillColor="#F2F4F2" android:pathData="M63,20 h2.4 v62 h-2.4 Z" />
+
+    <!-- Flag -->
+    <path android:fillColor="#FF5252"
+        android:pathData="M65.4,22 Q80,26 92,22 Q80,34 92,38 Q80,42 65.4,38 Z" />
+
+    <!-- Golf ball -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M30,74 a11,11 0 1 0 22,0 a11,11 0 1 0 -22,0 Z" />
+    <!-- Ball shading + dimples -->
+    <path android:fillColor="#D6DCD7"
+        android:pathData="M41,63 a11,11 0 0 1 0,22 a11,11 0 0 0 0,-22 Z" />
+    <path android:fillColor="#C2C9C3"
+        android:pathData="M37,70 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 Z
+                          M43,70 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 Z
+                          M40,76 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 Z
+                          M34,76 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 Z
+                          M46,76 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 Z" />
+
+    <!-- Sparkle -->
+    <path android:fillColor="#FFCE4F"
+        android:pathData="M84,54 l1.4,3.6 l3.6,1.4 l-3.6,1.4 l-1.4,3.6 l-1.4,-3.6 l-3.6,-1.4 l3.6,-1.4 Z" />
+</vector>

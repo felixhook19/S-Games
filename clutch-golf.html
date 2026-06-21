@@ -1,0 +1,1960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#0b3d2e" />
+<title>Clutch Golf</title>
+<!--
+  Clutch Golf — a fully-offline, single-file golf game (Golf Clash / PGA style).
+  Everything (CSS + JS) lives in this one file so the Android WebView wrapper can
+  ship it as a tiny self-contained APK. State persists via localStorage.
+
+  Code is organised into namespaces on the single global GAME object:
+    GAME.DATA    static data + stat maths
+    GAME.save    persisted state (localStorage)
+    GAME.eco     economy / progression
+    GAME.phys    shot-flight simulation
+    GAME.render  canvas drawing
+    GAME.round   in-round controller + swing meter + AI opponent
+    GAME.ui      menu screens + routing
+-->
+<style>
+:root{
+  --bg:#07261c; --bg2:#0b3d2e; --panel:rgba(255,255,255,.08); --panel2:rgba(255,255,255,.13);
+  --line:rgba(255,255,255,.16); --txt:#f3f8f4; --muted:#9fc4b2; --good:#46d39a; --gold:#ffce4f;
+  --gem:#5ad1ff; --coin:#ffce4f; --danger:#ff6b6b;
+  --common:#cfe6da; --rare:#5ad1ff; --epic:#c77dff; --legendary:#ffb14e;
+  --shadow:0 8px 28px rgba(0,0,0,.38);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  color:var(--txt); background:radial-gradient(120% 100% at 50% 0%,var(--bg2),var(--bg) 70%);
+  overflow:hidden; user-select:none; -webkit-user-select:none;
+}
+#app{position:fixed;inset:0;overflow:hidden}
+.screen{position:absolute;inset:0;display:none;flex-direction:column;animation:fade .25s ease}
+.screen.active{display:flex}
+@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.scroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 90px}
+
+/* ---------- top bar / wallet ---------- */
+.topbar{display:flex;align-items:center;gap:10px;padding:12px 14px;padding-top:max(12px,env(safe-area-inset-top));
+  background:linear-gradient(180deg,rgba(0,0,0,.28),transparent)}
+.topbar .title{font-weight:800;letter-spacing:.5px;font-size:18px}
+.topbar .title b{color:var(--gold)}
+.spacer{flex:1}
+.wallet{display:flex;gap:8px}
+.pill{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--line);
+  border-radius:999px;padding:6px 11px;font-weight:700;font-size:13px}
+.dot{width:15px;height:15px;border-radius:50%}
+.dot.coin{background:radial-gradient(circle at 35% 30%,#fff3c4,var(--coin));box-shadow:0 0 8px rgba(255,206,79,.6)}
+.dot.gem{background:radial-gradient(circle at 35% 30%,#dff7ff,var(--gem));box-shadow:0 0 8px rgba(90,209,255,.6);
+  border-radius:3px;transform:rotate(45deg);width:13px;height:13px}
+.iconbtn{background:var(--panel);border:1px solid var(--line);color:var(--txt);border-radius:12px;
+  width:40px;height:40px;font-size:18px;display:grid;place-items:center}
+
+/* ---------- buttons ---------- */
+.btn{border:0;border-radius:14px;padding:14px 18px;font-weight:800;font-size:15px;color:#06231a;
+  background:linear-gradient(180deg,#6ff0b6,var(--good));box-shadow:var(--shadow);letter-spacing:.3px}
+.btn:active{transform:translateY(1px)}
+.btn.alt{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+.btn.gold{background:linear-gradient(180deg,#ffe08a,var(--gold));color:#3a2a00}
+.btn.gem{background:linear-gradient(180deg,#bdeeff,var(--gem));color:#07303d}
+.btn.wide{width:100%}
+.btn:disabled{opacity:.45;filter:grayscale(.4)}
+
+/* ---------- home ---------- */
+.hero{margin:6px 0 16px;text-align:center}
+.hero h1{font-size:40px;font-weight:900;letter-spacing:1px;line-height:1}
+.hero h1 span{color:var(--gold);text-shadow:0 4px 16px rgba(255,206,79,.4)}
+.hero p{color:var(--muted);margin-top:6px;font-size:13px}
+.levelcard{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:14px;margin-bottom:14px}
+.levelrow{display:flex;align-items:center;gap:12px}
+.avatar{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;font-size:24px;
+  background:linear-gradient(135deg,#2a8f6a,#0b3d2e);border:1px solid var(--line)}
+.lvlname{font-weight:800}
+.xpbar{height:9px;border-radius:999px;background:rgba(0,0,0,.3);overflow:hidden;margin-top:8px}
+.xpbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--good),#9bffd5);border-radius:999px;transition:width .4s}
+.menu{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.menu .tile{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px 14px;text-align:left;
+  position:relative;overflow:hidden;color:var(--txt);min-height:104px;display:flex;flex-direction:column;justify-content:flex-end}
+.menu .tile .emoji{font-size:30px;position:absolute;top:12px;left:14px;filter:drop-shadow(0 3px 6px rgba(0,0,0,.4))}
+.menu .tile b{font-size:18px}
+.menu .tile small{color:var(--muted);display:block;margin-top:2px}
+.menu .tile.play{grid-column:1/3;background:linear-gradient(120deg,#0f5a40,#13734f);min-height:130px}
+.menu .tile.play .emoji{font-size:44px}
+
+/* free chest */
+.freechest{display:flex;align-items:center;gap:12px;background:linear-gradient(120deg,#3a2c66,#5a3fa0);
+  border:1px solid var(--line);border-radius:18px;padding:14px;margin-bottom:14px}
+.freechest .ico{font-size:34px}
+.freechest .t b{font-size:16px}
+.freechest .t small{color:#e7dcff;display:block}
+
+/* ---------- section headers ---------- */
+.shead{display:flex;align-items:center;gap:10px;margin:6px 2px 12px}
+.shead h2{font-size:22px;font-weight:900}
+.back{background:var(--panel);border:1px solid var(--line);color:var(--txt);border-radius:12px;width:40px;height:40px;font-size:20px}
+
+/* ---------- tour cards ---------- */
+.tour-card{border:1px solid var(--line);border-radius:20px;padding:0;margin-bottom:14px;overflow:hidden;position:relative;
+  box-shadow:var(--shadow)}
+.tour-card .banner{height:96px;position:relative;display:flex;align-items:flex-end;padding:12px 14px}
+.tour-card .banner h3{font-size:20px;font-weight:900;text-shadow:0 2px 8px rgba(0,0,0,.5)}
+.tour-card .body{padding:12px 14px;background:var(--panel)}
+.tour-card .meta{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-bottom:12px}
+.tour-card .meta b{color:var(--txt)}
+.tour-card.locked .banner::after{content:"🔒 LVL " attr(data-req);position:absolute;inset:0;background:rgba(0,0,0,.55);
+  display:flex;align-items:center;justify-content:center;font-weight:900;font-size:18px;letter-spacing:1px}
+.stake{display:flex;align-items:center;gap:6px;font-weight:800}
+
+/* ---------- bag / items ---------- */
+.tabs{display:flex;gap:8px;margin-bottom:14px}
+.tab{flex:1;background:var(--panel);border:1px solid var(--line);color:var(--muted);border-radius:12px;padding:11px;font-weight:800}
+.tab.active{background:var(--panel2);color:var(--txt)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:12px;position:relative;text-align:left;color:var(--txt)}
+.card .rar{position:absolute;top:0;left:0;right:0;height:4px;border-radius:16px 16px 0 0}
+.card .ic{font-size:26px}
+.card .nm{font-weight:800;margin-top:6px;font-size:14px;line-height:1.15}
+.card .ty{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+.card .lv{display:inline-block;margin-top:6px;font-size:11px;font-weight:800;background:rgba(0,0,0,.25);
+  border-radius:999px;padding:2px 8px}
+.card .eq{position:absolute;top:8px;right:8px;font-size:11px;font-weight:900;color:var(--good)}
+.card.dim{opacity:.5}
+.card .cardbar{height:6px;border-radius:999px;background:rgba(0,0,0,.3);margin-top:8px;overflow:hidden}
+.card .cardbar>i{display:block;height:100%;background:linear-gradient(90deg,var(--rare),#bff0ff)}
+
+/* item detail */
+.detail{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:18px;text-align:center}
+.detail .bigico{font-size:64px}
+.detail h3{font-size:24px;font-weight:900;margin-top:6px}
+.detail .rtag{display:inline-block;font-size:11px;font-weight:900;letter-spacing:1px;text-transform:uppercase;
+  border-radius:999px;padding:3px 12px;margin-top:6px}
+.stats{display:grid;gap:10px;margin:18px 0;text-align:left}
+.stat{display:flex;align-items:center;gap:10px}
+.stat .lab{width:84px;color:var(--muted);font-size:13px;font-weight:700}
+.stat .track{flex:1;height:10px;border-radius:999px;background:rgba(0,0,0,.3);overflow:hidden}
+.stat .track>i{display:block;height:100%;border-radius:999px;background:linear-gradient(90deg,#46d39a,#9bffd5)}
+.stat .val{width:34px;text-align:right;font-weight:800;font-size:13px}
+.upg{display:flex;gap:10px}
+.upg .btn{flex:1}
+
+/* ---------- shop ---------- */
+.shop-sec h2{font-size:18px;margin:16px 2px 10px;font-weight:900}
+.chest-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.chest{background:linear-gradient(160deg,#2c2150,#46357f);border:1px solid var(--line);border-radius:18px;
+  padding:16px;text-align:center}
+.chest .cico{font-size:46px}
+.chest .cn{font-weight:900;margin-top:4px}
+.chest .cd{color:#d9cdf5;font-size:12px;margin:4px 0 12px}
+
+/* ---------- game screen ---------- */
+#screen-game{background:#0a1f17}
+#gc{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+.ghud{position:absolute;inset:0;pointer-events:none}
+.ghud .top{position:absolute;top:0;left:0;right:0;display:flex;gap:8px;align-items:flex-start;
+  padding:max(10px,env(safe-area-inset-top)) 12px 10px;background:linear-gradient(180deg,rgba(0,0,0,.45),transparent)}
+.ghud .chip{background:rgba(0,0,0,.42);border:1px solid var(--line);border-radius:12px;padding:7px 11px;
+  backdrop-filter:blur(4px);font-weight:800;font-size:13px}
+.ghud .chip small{display:block;color:var(--muted);font-weight:700;font-size:10px;letter-spacing:.5px}
+.ghud .quit{pointer-events:auto}
+#gWind{display:flex;align-items:center;gap:8px}
+#gWindArrow{font-size:18px;display:inline-block;transition:transform .3s}
+
+/* club strip */
+#gClubStrip{position:absolute;left:0;right:0;bottom:max(14px,env(safe-area-inset-bottom));
+  display:flex;gap:8px;justify-content:center;pointer-events:auto;padding:0 10px;flex-wrap:wrap}
+.clubbtn{background:rgba(0,0,0,.42);border:1px solid var(--line);border-radius:12px;padding:8px 10px;
+  color:var(--txt);font-weight:800;font-size:12px;backdrop-filter:blur(4px);min-width:54px;text-align:center}
+.clubbtn.sel{background:var(--good);color:#06231a;border-color:transparent}
+.clubbtn small{display:block;color:var(--muted);font-weight:700;font-size:10px}
+.clubbtn.sel small{color:#06231a}
+
+/* swing meter */
+#gMeter{position:absolute;right:16px;bottom:84px;width:54px;height:230px;border-radius:16px;
+  background:linear-gradient(180deg,rgba(0,0,0,.5),rgba(0,0,0,.32));border:1px solid var(--line);
+  overflow:hidden;pointer-events:auto;backdrop-filter:blur(4px);display:none}
+#gMeter.show{display:block}
+#gMeterFill{position:absolute;left:0;right:0;bottom:0;height:0%;
+  background:linear-gradient(0deg,#ff6b6b,#ffce4f 55%,#46d39a)}
+#gPerfect{position:absolute;left:-2px;right:-2px;height:3px;background:#fff;box-shadow:0 0 8px #fff;display:none;bottom:0}
+#gPerfBand{position:absolute;left:0;right:0;background:rgba(70,211,154,.35);display:none;bottom:0;height:0}
+#gMarker{position:absolute;left:-3px;right:-3px;height:5px;background:#fff;border-radius:3px;
+  box-shadow:0 0 10px rgba(255,255,255,.9);bottom:0}
+#gMeterLabel{position:absolute;top:6px;left:0;right:0;text-align:center;font-size:9px;font-weight:900;
+  letter-spacing:1px;color:var(--muted)}
+
+/* swing button + aim hint */
+#gSwing{position:absolute;left:16px;bottom:84px;pointer-events:auto;display:none}
+#gAimHint{position:absolute;left:0;right:0;top:54%;text-align:center;font-size:12px;color:rgba(255,255,255,.75);
+  text-shadow:0 1px 4px rgba(0,0,0,.6);font-weight:700}
+#gTapCatch{position:absolute;inset:0;pointer-events:none}
+#gTapCatch.arm{pointer-events:auto}
+
+/* in-round overlays */
+.overlay{position:absolute;inset:0;background:rgba(5,18,13,.78);backdrop-filter:blur(6px);
+  display:none;align-items:center;justify-content:center;padding:20px;pointer-events:auto;z-index:5}
+.overlay.show{display:flex;animation:fade .25s}
+.result-card{background:linear-gradient(180deg,#10402e,#0a2c20);border:1px solid var(--line);border-radius:24px;
+  padding:24px;width:100%;max-width:380px;text-align:center;box-shadow:var(--shadow)}
+.result-card h2{font-size:28px;font-weight:900}
+.result-card .sub{color:var(--muted);margin-top:4px}
+.scorecard{margin:16px 0;border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.scorecard table{width:100%;border-collapse:collapse;font-size:13px}
+.scorecard th,.scorecard td{padding:8px 6px;text-align:center;border-bottom:1px solid rgba(255,255,255,.08)}
+.scorecard th{background:rgba(0,0,0,.25);color:var(--muted);font-weight:800}
+.scorecard tr:last-child td{border-bottom:0}
+.scorecard td.me b{color:var(--good)}
+.rewards{display:flex;gap:14px;justify-content:center;margin:14px 0}
+.rewards .r{display:flex;align-items:center;gap:6px;font-weight:900;font-size:17px}
+
+/* toast + reward pop */
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);opacity:0;
+  background:rgba(0,0,0,.82);border:1px solid var(--line);border-radius:12px;padding:11px 18px;font-weight:700;
+  z-index:50;transition:.3s;pointer-events:none;max-width:90%;text-align:center}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+.reward-pop{position:fixed;inset:0;display:none;align-items:center;justify-content:center;z-index:60;
+  background:rgba(5,18,13,.82);backdrop-filter:blur(6px)}
+.reward-pop.show{display:flex;animation:fade .25s}
+.chest-open{text-align:center}
+.chest-open .big{font-size:96px;animation:bob 1.4s ease-in-out infinite}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-10px) rotate(3deg)}}
+.loot{display:flex;flex-wrap:wrap;gap:10px;justify-content:center;margin:16px 0;max-width:340px}
+.loot .li{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 12px;min-width:88px;
+  text-align:center;animation:pop .35s backwards}
+@keyframes pop{from{transform:scale(.4);opacity:0}to{transform:scale(1);opacity:1}}
+.loot .li .e{font-size:26px}
+.loot .li .q{font-weight:900;margin-top:2px}
+.loot .li small{color:var(--muted);display:block;font-size:11px}
+
+/* ---------- boot / splash ---------- */
+#screen-boot{align-items:center;justify-content:center;background:radial-gradient(120% 90% at 50% 10%,#13734f,#06241a 75%)}
+.boot-wrap{text-align:center;padding:24px}
+.boot-logo{font-size:64px;animation:bob 2s ease-in-out infinite}
+.boot-wrap h1{font-size:46px;font-weight:900;letter-spacing:1px;margin-top:6px}
+.boot-wrap h1 span{color:var(--gold)}
+.boot-wrap p{color:var(--muted);margin-top:6px}
+.boot-bar{width:220px;height:8px;border-radius:999px;background:rgba(0,0,0,.35);overflow:hidden;margin:26px auto 0}
+.boot-bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--good),#9bffd5);transition:width .2s}
+#bootStart{margin-top:26px;display:none;animation:fade .4s}
+.muted{color:var(--muted)}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ============ BOOT ============ -->
+  <section class="screen active" id="screen-boot">
+    <div class="boot-wrap">
+      <div class="boot-logo">⛳</div>
+      <h1>CLUTCH <span>GOLF</span></h1>
+      <p>Sink the putt when it matters.</p>
+      <div class="boot-bar"><i id="bootFill"></i></div>
+      <button class="btn gold" id="bootStart">TAP TO PLAY</button>
+    </div>
+  </section>
+
+  <!-- ============ HOME / CLUBHOUSE ============ -->
+  <section class="screen" id="screen-home">
+    <div class="topbar">
+      <div class="title">CLUTCH <b>GOLF</b></div>
+      <div class="spacer"></div>
+      <div class="wallet">
+        <div class="pill"><span class="dot coin"></span><span id="wCoins">0</span></div>
+        <div class="pill"><span class="dot gem"></span><span id="wGems">0</span></div>
+      </div>
+    </div>
+    <div class="scroll">
+      <div class="levelcard">
+        <div class="levelrow">
+          <div class="avatar">🏌️</div>
+          <div style="flex:1">
+            <div class="lvlname" id="hName">Rookie</div>
+            <div class="muted" style="font-size:12px">Level <b id="hLevel">1</b> · <span id="hXp">0/0 XP</span></div>
+            <div class="xpbar"><i id="hXpFill" style="width:0%"></i></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="freechest" id="freeChest">
+        <div class="ico">🎁</div>
+        <div class="t" style="flex:1"><b>Free Chest</b><small id="freeChestSub">Ready!</small></div>
+        <button class="btn gold" id="freeChestBtn">OPEN</button>
+      </div>
+
+      <div class="menu">
+        <button class="tile play" data-nav="tours">
+          <span class="emoji">⛳</span>
+          <b>Play Match</b><small>Stake coins · win chests</small>
+        </button>
+        <button class="tile" data-nav="bag">
+          <span class="emoji">🎒</span>
+          <b>My Bag</b><small>Clubs &amp; balls</small>
+        </button>
+        <button class="tile" data-nav="shop">
+          <span class="emoji">🛒</span>
+          <b>Shop</b><small>Gear &amp; chests</small>
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TOURS ============ -->
+  <section class="screen" id="screen-tours">
+    <div class="topbar">
+      <button class="back" data-nav="home">‹</button>
+      <div class="title">Tours</div>
+      <div class="spacer"></div>
+      <div class="wallet">
+        <div class="pill"><span class="dot coin"></span><span class="wCoins">0</span></div>
+        <div class="pill"><span class="dot gem"></span><span class="wGems">0</span></div>
+      </div>
+    </div>
+    <div class="scroll" id="tourList"></div>
+  </section>
+
+  <!-- ============ BAG ============ -->
+  <section class="screen" id="screen-bag">
+    <div class="topbar">
+      <button class="back" data-nav="home">‹</button>
+      <div class="title">My Bag</div>
+      <div class="spacer"></div>
+      <div class="wallet">
+        <div class="pill"><span class="dot coin"></span><span class="wCoins">0</span></div>
+        <div class="pill"><span class="dot gem"></span><span class="wGems">0</span></div>
+      </div>
+    </div>
+    <div class="scroll">
+      <div class="tabs">
+        <button class="tab active" data-bagtab="clubs">Clubs</button>
+        <button class="tab" data-bagtab="balls">Balls</button>
+      </div>
+      <div class="grid" id="bagGrid"></div>
+    </div>
+  </section>
+
+  <!-- ============ ITEM DETAIL ============ -->
+  <section class="screen" id="screen-item">
+    <div class="topbar">
+      <button class="back" id="itemBack">‹</button>
+      <div class="title">Details</div>
+      <div class="spacer"></div>
+      <div class="wallet">
+        <div class="pill"><span class="dot coin"></span><span class="wCoins">0</span></div>
+        <div class="pill"><span class="dot gem"></span><span class="wGems">0</span></div>
+      </div>
+    </div>
+    <div class="scroll" id="itemBody"></div>
+  </section>
+
+  <!-- ============ SHOP ============ -->
+  <section class="screen" id="screen-shop">
+    <div class="topbar">
+      <button class="back" data-nav="home">‹</button>
+      <div class="title">Shop</div>
+      <div class="spacer"></div>
+      <div class="wallet">
+        <div class="pill"><span class="dot coin"></span><span class="wCoins">0</span></div>
+        <div class="pill"><span class="dot gem"></span><span class="wGems">0</span></div>
+      </div>
+    </div>
+    <div class="scroll" id="shopBody"></div>
+  </section>
+
+  <!-- ============ GAME / ROUND ============ -->
+  <section class="screen" id="screen-game">
+    <canvas id="gc"></canvas>
+    <div class="ghud">
+      <div class="top">
+        <button class="chip quit" id="gQuit">✕</button>
+        <div class="chip"><small>HOLE</small><span id="gHole">1/3</span></div>
+        <div class="chip"><small>PAR</small><span id="gPar">4</span></div>
+        <div class="chip"><small>TO PIN</small><span id="gDist">0y</span></div>
+        <div class="spacer" style="flex:1"></div>
+        <div class="chip" id="gWind"><small>WIND</small><span id="gWindArrow">↑</span><span id="gWindSpd">0</span></div>
+        <div class="chip"><small>SCORE</small><span id="gScore">E</span></div>
+      </div>
+      <div id="gAimHint">Drag to aim · pick a club · tap SWING</div>
+      <div id="gClubStrip"></div>
+      <button class="btn gold" id="gSwing">SWING</button>
+      <div id="gMeter">
+        <div id="gMeterLabel">PWR</div>
+        <div id="gMeterFill"></div>
+        <div id="gPerfBand"></div>
+        <div id="gPerfect"></div>
+        <div id="gMarker"></div>
+      </div>
+      <div id="gTapCatch"></div>
+    </div>
+
+    <!-- hole / match result overlay -->
+    <div class="overlay" id="gResult">
+      <div class="result-card" id="gResultCard"></div>
+    </div>
+  </section>
+
+</div>
+
+<div class="toast" id="toast"></div>
+<div class="reward-pop" id="rewardPop"></div>
+
+<script>
+/* =====================================================================
+   GAME namespace
+===================================================================== */
+window.GAME = window.GAME || {};
+var G = window.GAME;
+
+/* small helpers */
+G.util = {
+  clamp:function(v,a,b){return v<a?a:v>b?b:v;},
+  lerp:function(a,b,t){return a+(b-a)*t;},
+  rnd:function(a,b){return a+Math.random()*(b-a);},
+  // approx gaussian
+  gauss:function(mean,sd){var u=0,v=0;while(u===0)u=Math.random();while(v===0)v=Math.random();
+    return mean+sd*Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);},
+  fmt:function(n){return n>=1000?(n/1000).toFixed(n%1000?1:0)+'k':(''+Math.round(n));}
+};
+</script>
+
+<script>
+/* =====================================================================
+   GAME.DATA — static data + stat maths  (pure)
+===================================================================== */
+(function(){
+var D = G.DATA = {};
+
+D.RARITIES = {
+  common:    {name:"Common",    color:"#cfe6da", glow:"rgba(207,230,218,.5)", maxLevel:5,  rank:0},
+  rare:      {name:"Rare",      color:"#5ad1ff", glow:"rgba(90,209,255,.6)",  maxLevel:7,  rank:1},
+  epic:      {name:"Epic",      color:"#c77dff", glow:"rgba(199,125,255,.6)", maxLevel:9,  rank:2},
+  legendary: {name:"Legendary", color:"#ffb14e", glow:"rgba(255,177,78,.7)",  maxLevel:11, rank:3}
+};
+
+// club icon by type
+D.CLUB_ICON = {Driver:"🏌️",Wood:"🪵",Iron:"⚙️",Wedge:"🔻",Putter:"🎯"};
+
+// power/accuracy/spin/control are 1..10 "dots"; dist is base carry in yards.
+function C(o){o.kind="club";return o;}
+D.CLUBS = [
+  // starters (commons, auto-owned)
+  C({id:"drv_starter",name:"Range Driver",type:"Driver",rarity:"common",dist:230,power:6,accuracy:4,spin:3,control:4,price:0,cardsPerLevel:8}),
+  C({id:"wod_starter",name:"Range Wood",  type:"Wood",  rarity:"common",dist:205,power:5,accuracy:5,spin:4,control:5,price:0,cardsPerLevel:8}),
+  C({id:"irn_starter",name:"Range Iron",  type:"Iron",  rarity:"common",dist:170,power:4,accuracy:6,spin:5,control:6,price:0,cardsPerLevel:8}),
+  C({id:"wed_starter",name:"Range Wedge", type:"Wedge", rarity:"common",dist:95, power:3,accuracy:7,spin:8,control:7,price:0,cardsPerLevel:8}),
+  C({id:"put_starter",name:"Range Putter",type:"Putter",rarity:"common",dist:30, power:5,accuracy:7,spin:1,control:8,price:0,cardsPerLevel:8}),
+  // shop clubs
+  C({id:"drv_titan", name:"Titan Driver", type:"Driver",rarity:"rare", dist:245,power:8,accuracy:5,spin:3,control:5,price:1200,cardsPerLevel:10}),
+  C({id:"drv_apex",  name:"Apex Driver",  type:"Driver",rarity:"epic", dist:262,power:9,accuracy:6,spin:4,control:6,price:4800,cardsPerLevel:12}),
+  C({id:"drv_zenith",name:"Zenith Driver",type:"Driver",rarity:"legendary",dist:278,power:10,accuracy:7,spin:4,control:8,gem:120,cardsPerLevel:16}),
+  C({id:"wod_falcon",name:"Falcon Wood",  type:"Wood",  rarity:"rare", dist:218,power:7,accuracy:6,spin:5,control:6,price:1100,cardsPerLevel:10}),
+  C({id:"wod_comet", name:"Comet Wood",   type:"Wood",  rarity:"epic", dist:232,power:8,accuracy:7,spin:6,control:7,price:4400,cardsPerLevel:12}),
+  C({id:"irn_razor", name:"Razor Iron",   type:"Iron",  rarity:"rare", dist:178,power:6,accuracy:8,spin:6,control:7,price:1000,cardsPerLevel:10}),
+  C({id:"irn_blade", name:"Blade Iron",   type:"Iron",  rarity:"epic", dist:188,power:7,accuracy:9,spin:7,control:8,price:4200,cardsPerLevel:12}),
+  C({id:"wed_spin",  name:"Spin King",    type:"Wedge", rarity:"rare", dist:100,power:4,accuracy:8,spin:10,control:8,price:950,cardsPerLevel:10}),
+  C({id:"wed_pitch", name:"Pitch Master", type:"Wedge", rarity:"epic", dist:108,power:5,accuracy:9,spin:10,control:9,price:4000,cardsPerLevel:12}),
+  C({id:"put_true",  name:"TrueRoll",     type:"Putter",rarity:"rare", dist:34, power:6,accuracy:8,spin:1,control:9,price:900,cardsPerLevel:10}),
+  C({id:"put_laser", name:"Laser Putter", type:"Putter",rarity:"epic", dist:36, power:6,accuracy:10,spin:1,control:10,price:3800,cardsPerLevel:12})
+];
+
+function B(o){o.kind="ball";return o;}
+D.BALLS = [
+  B({id:"bal_range",name:"Range Ball",   rarity:"common",   power:1,accuracy:1,spin:1,control:1,price:0,   cardsPerLevel:8}),
+  B({id:"bal_tour", name:"Tour Ball",    rarity:"rare",     power:2,accuracy:2,spin:2,control:1,price:800, cardsPerLevel:10}),
+  B({id:"bal_pro",  name:"Pro V Ball",   rarity:"epic",     power:2,accuracy:3,spin:3,control:2,price:3600,cardsPerLevel:12}),
+  B({id:"bal_elite",name:"Elite X Ball", rarity:"legendary",power:3,accuracy:3,spin:3,control:3,gem:100,   cardsPerLevel:16})
+];
+
+// quick lookups
+D.byId = {};
+D.CLUBS.concat(D.BALLS).forEach(function(it){D.byId[it.id]=it;});
+D.item = function(id){return D.byId[id];};
+
+/* ---- holes (parametric) ----
+   x = lateral yards (- left / + right), y = yards from tee (0..len). */
+function H(o){return o;}
+D.TOURS = [
+  {id:"t_bay", name:"Beginner Bay", ai:0.34, entry:50, reward:130, gemReward:1, levelReq:1,
+   palette:{sky1:"#bfe9ff",sky2:"#7fc6e8",fairway:"#5fbf6a",fairwayD:"#4aa657",rough:"#2f8f52",rough2:"#26794a",green:"#74d77f",sand:"#e9d49a",water:"#3aa0d6",tree:"#2c7a46"},
+   holes:[
+     H({par:3,len:150,w:42,fw:22,tee:{x:0},pin:{x:4},greenR:13,bend:[],
+        hazards:[{x:-18,y:0.62,r:9,type:"sand"}],trees:[{x:30,y:0.4},{x:-32,y:0.55}],wind:{min:4,max:10}}),
+     H({par:4,len:295,w:50,fw:24,tee:{x:0},pin:{x:-8},greenR:14,bend:[{y:0.55,x:-14}],
+        hazards:[{x:22,y:0.5,r:11,type:"sand"},{x:-26,y:0.78,r:10,type:"water"}],trees:[{x:34,y:0.3},{x:-30,y:0.66}],wind:{min:5,max:12}}),
+     H({par:4,len:320,w:52,fw:25,tee:{x:0},pin:{x:6},greenR:14,bend:[{y:0.5,x:12}],
+        hazards:[{x:-20,y:0.45,r:11,type:"sand"},{x:18,y:0.82,r:10,type:"sand"}],trees:[{x:-36,y:0.35},{x:38,y:0.6}],wind:{min:5,max:13}})
+   ]},
+  {id:"t_links", name:"Sunny Links", ai:0.5, entry:160, reward:400, gemReward:2, levelReq:3,
+   palette:{sky1:"#cdeffb",sky2:"#9bd1e6",fairway:"#69c06a",fairwayD:"#52a458",rough:"#37945a",rough2:"#2c7c4c",green:"#7fda86",sand:"#efdca7",water:"#2f94cf",tree:"#2f7a48"},
+   holes:[
+     H({par:4,len:330,w:52,fw:23,tee:{x:0},pin:{x:-10},greenR:13,bend:[{y:0.5,x:-16}],
+        hazards:[{x:20,y:0.55,r:11,type:"water"},{x:-24,y:0.8,r:10,type:"sand"}],trees:[{x:36,y:0.32},{x:-34,y:0.62}],wind:{min:8,max:16}}),
+     H({par:5,len:430,w:56,fw:24,tee:{x:0},pin:{x:10},greenR:14,bend:[{y:0.4,x:14},{y:0.72,x:-6}],
+        hazards:[{x:-22,y:0.42,r:12,type:"sand"},{x:24,y:0.66,r:11,type:"water"},{x:-16,y:0.86,r:9,type:"sand"}],
+        trees:[{x:38,y:0.25},{x:-38,y:0.5},{x:34,y:0.78}],wind:{min:8,max:18}}),
+     H({par:3,len:175,w:46,fw:22,tee:{x:0},pin:{x:0},greenR:13,bend:[],
+        hazards:[{x:-16,y:0.6,r:10,type:"water"},{x:16,y:0.6,r:10,type:"water"}],trees:[{x:30,y:0.35},{x:-30,y:0.35}],wind:{min:9,max:18}})
+   ]},
+  {id:"t_dunes", name:"Desert Dunes", ai:0.64, entry:450, reward:1000, gemReward:4, levelReq:6,
+   palette:{sky1:"#ffe4b8",sky2:"#f6b97a",fairway:"#8fc05a",fairwayD:"#74a648",rough:"#b89a52",rough2:"#9c803f",green:"#86d36a",sand:"#f1d79b",water:"#34a6cf",tree:"#5b7a35"},
+   holes:[
+     H({par:4,len:340,w:54,fw:22,tee:{x:0},pin:{x:8},greenR:13,bend:[{y:0.52,x:12}],
+        hazards:[{x:-22,y:0.5,r:13,type:"sand"},{x:20,y:0.78,r:12,type:"sand"}],trees:[{x:-36,y:0.4}],wind:{min:10,max:20}}),
+     H({par:3,len:185,w:46,fw:21,tee:{x:0},pin:{x:-6},greenR:12,bend:[],
+        hazards:[{x:14,y:0.55,r:12,type:"sand"},{x:-18,y:0.72,r:11,type:"water"}],trees:[{x:32,y:0.3}],wind:{min:11,max:22}}),
+     H({par:5,len:455,w:58,fw:24,tee:{x:0},pin:{x:-12},greenR:14,bend:[{y:0.38,x:-16},{y:0.7,x:8}],
+        hazards:[{x:24,y:0.44,r:13,type:"sand"},{x:-26,y:0.68,r:12,type:"sand"},{x:18,y:0.88,r:10,type:"water"}],
+        trees:[{x:40,y:0.5},{x:-40,y:0.3}],wind:{min:11,max:23}}),
+     H({par:4,len:350,w:54,fw:23,tee:{x:0},pin:{x:10},greenR:13,bend:[{y:0.5,x:14}],
+        hazards:[{x:-24,y:0.48,r:13,type:"sand"},{x:22,y:0.8,r:12,type:"sand"}],trees:[{x:-38,y:0.6}],wind:{min:12,max:24}})
+   ]},
+  {id:"t_cliffs", name:"Coastal Cliffs", ai:0.79, entry:1100, reward:2600, gemReward:8, levelReq:10,
+   palette:{sky1:"#cfeaff",sky2:"#7fb6d8",fairway:"#5cba6a",fairwayD:"#479d56",rough:"#2d8a55",rough2:"#236f45",green:"#76d781",sand:"#ecd8a4",water:"#1f7fc0",tree:"#266b3f"},
+   holes:[
+     H({par:4,len:345,w:50,fw:21,tee:{x:0},pin:{x:-10},greenR:12,bend:[{y:0.5,x:-16}],
+        hazards:[{x:20,y:0.5,r:12,type:"water"},{x:-22,y:0.82,r:11,type:"water"}],trees:[{x:34,y:0.34}],wind:{min:13,max:26}}),
+     H({par:3,len:190,w:44,fw:20,tee:{x:0},pin:{x:8},greenR:12,bend:[],
+        hazards:[{x:-16,y:0.55,r:13,type:"water"}],trees:[{x:30,y:0.3},{x:-30,y:0.4}],wind:{min:14,max:28}}),
+     H({par:5,len:470,w:56,fw:23,tee:{x:0},pin:{x:12},greenR:13,bend:[{y:0.4,x:16},{y:0.74,x:-8}],
+        hazards:[{x:-24,y:0.44,r:13,type:"water"},{x:26,y:0.68,r:12,type:"sand"},{x:-18,y:0.88,r:11,type:"water"}],
+        trees:[{x:40,y:0.28},{x:-40,y:0.56}],wind:{min:14,max:28}}),
+     H({par:4,len:360,w:50,fw:21,tee:{x:0},pin:{x:-12},greenR:12,bend:[{y:0.52,x:-18}],
+        hazards:[{x:22,y:0.5,r:13,type:"water"},{x:-24,y:0.82,r:12,type:"sand"}],trees:[{x:36,y:0.4}],wind:{min:15,max:30}}),
+   ]}
+];
+D.tour = function(id){for(var i=0;i<D.TOURS.length;i++)if(D.TOURS[i].id===id)return D.TOURS[i];return null;};
+
+D.CHESTS = {
+  wood:   {name:"Wood Chest",   icon:"📦", coins:[40,120],  gems:[0,1], cards:[6,12],  rare:0.12,epic:0.0, leg:0.0},
+  silver: {name:"Silver Chest", icon:"🎁", coins:[120,320], gems:[1,3], cards:[12,22], rare:0.30,epic:0.08,leg:0.0},
+  gold:   {name:"Gold Chest",   icon:"🏆", coins:[300,750], gems:[3,7], cards:[22,40], rare:0.55,epic:0.20,leg:0.03}
+};
+D.CHEST_PRICE = {silver:60, gold:160}; // gems
+
+/* ---------- derived stat maths ---------- */
+D.maxLevel = function(item){return D.RARITIES[item.rarity].maxLevel;};
+// each level adds ~6% to base stats
+D.clubEffective = function(club,level){
+  var k=1+(level-1)*0.06;
+  return {
+    dist: Math.round(club.dist*(1+(level-1)*0.045)),
+    power: club.power, accuracy: club.accuracy, spin: club.spin, control: club.control,
+    powerF: club.power*k, accF: club.accuracy*k, spinF: club.spin*k, ctrlF: club.control*k
+  };
+};
+D.ballEffective = function(ball,level){
+  var k=1+(level-1)*0.08;
+  return {power:ball.power*k, accuracy:ball.accuracy*k, spin:ball.spin*k, control:ball.control*k};
+};
+D.cardsForNext = function(item,level){
+  // grows with level
+  return Math.round(item.cardsPerLevel*Math.pow(1.5,level-1));
+};
+D.coinForNext = function(item,level){
+  var base = item.rarity==="common"?40:item.rarity==="rare"?120:item.rarity==="epic"?320:800;
+  return Math.round(base*Math.pow(1.7,level-1));
+};
+D.xpForLevel = function(level){return Math.round(100*Math.pow(1.35,level-1));};
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.save — persisted state
+===================================================================== */
+(function(){
+var D=G.DATA, S={};
+G.save=S;
+var KEY="clutchgolf.v1", VER=1;
+
+function defaultState(){
+  var st={
+    v:VER, name:"Rookie", level:1, xp:0, coins:500, gems:25,
+    clubs:{}, balls:{},
+    bag:{Driver:"drv_starter",Wood:"wod_starter",Iron:"irn_starter",Wedge:"wed_starter",Putter:"put_starter",ball:"bal_range"},
+    tours:{}, chests:[], freeChestAt:0,
+    stats:{matches:0,wins:0,hio:0,eagles:0,birdies:0,bestStreak:0,streak:0}
+  };
+  // starter inventory owned + level 1
+  ["drv_starter","wod_starter","irn_starter","wed_starter","put_starter"].forEach(function(id){
+    st.clubs[id]={owned:true,level:1,cards:0};
+  });
+  st.balls["bal_range"]={owned:true,level:1,cards:0};
+  // unlock first tour
+  D.TOURS.forEach(function(t){st.tours[t.id]={unlocked:t.levelReq<=1,plays:0,wins:0,best:null};});
+  return st;
+}
+
+S.migrate=function(st){ if(!st||st.v!==VER) return null; return st; };
+
+S.load=function(){
+  var raw=null; try{raw=localStorage.getItem(KEY);}catch(e){}
+  var st=null; if(raw){ try{st=S.migrate(JSON.parse(raw));}catch(e){st=null;} }
+  if(!st) st=defaultState();
+  G.state=st; return st;
+};
+S.commit=function(){ try{localStorage.setItem(KEY,JSON.stringify(G.state));}catch(e){} };
+S.reset=function(){ G.state=defaultState(); S.commit(); return G.state; };
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.eco — economy / progression
+===================================================================== */
+(function(){
+var D=G.DATA, U=G.util;
+var E=G.eco={};
+function st(){return G.state;}
+function commit(){G.save.commit();}
+
+E.addCoins=function(n){st().coins+=n;commit();};
+E.spendCoins=function(n){if(st().coins<n)return false;st().coins-=n;commit();return true;};
+E.addGems=function(n){st().gems+=n;commit();};
+E.spendGems=function(n){if(st().gems<n)return false;st().gems-=n;commit();return true;};
+
+E.xpProgress=function(){
+  var need=D.xpForLevel(st().level);
+  return {have:st().xp,need:need,frac:U.clamp(st().xp/need,0,1)};
+};
+E.addXp=function(n){
+  var s=st(); s.xp+=n;
+  while(s.xp>=D.xpForLevel(s.level)){
+    s.xp-=D.xpForLevel(s.level); s.level++;
+    // level rewards
+    E.addCoins(s.level*40); if(s.level%2===0)E.addGems(2);
+    // unlock tours
+    D.TOURS.forEach(function(t){ if(t.levelReq<=s.level && s.tours[t.id]) s.tours[t.id].unlocked=true; });
+    G._levelUp=s.level;
+  }
+  commit();
+};
+
+E.inv=function(kind,id){
+  var bag=kind==="ball"?st().balls:st().clubs;
+  if(!bag[id]) bag[id]={owned:false,level:1,cards:0};
+  return bag[id];
+};
+E.recordOf=function(item){return E.inv(item.kind,item.id);};
+
+E.buy=function(item){
+  var rec=E.inv(item.kind,item.id);
+  if(rec.owned)return false;
+  if(item.gem){ if(!E.spendGems(item.gem))return false; }
+  else { if(!E.spendCoins(item.price))return false; }
+  rec.owned=true; rec.level=1; commit(); return true;
+};
+// card-gated unlock for commons; rare+ need coin unlock too (handled in buy)
+E.unlock=function(item){
+  var rec=E.inv(item.kind,item.id);
+  if(rec.owned)return false;
+  var need=D.cardsForNext(item,1);
+  if(rec.cards<need)return false;
+  rec.cards-=need; rec.owned=true; rec.level=1; commit(); return true;
+};
+E.canUpgrade=function(item){
+  var rec=E.inv(item.kind,item.id);
+  if(!rec.owned)return false;
+  if(rec.level>=D.maxLevel(item))return false;
+  return rec.cards>=D.cardsForNext(item,rec.level) && st().coins>=D.coinForNext(item,rec.level);
+};
+E.upgrade=function(item){
+  if(!E.canUpgrade(item))return false;
+  var rec=E.inv(item.kind,item.id);
+  rec.cards-=D.cardsForNext(item,rec.level);
+  E.spendCoins(D.coinForNext(item,rec.level));
+  rec.level++; commit(); return true;
+};
+E.equip=function(item){
+  var rec=E.inv(item.kind,item.id);
+  if(!rec.owned)return false;
+  if(item.kind==="ball") st().bag.ball=item.id;
+  else st().bag[item.type]=item.id;
+  commit(); return true;
+};
+E.isEquipped=function(item){
+  if(item.kind==="ball")return st().bag.ball===item.id;
+  return st().bag[item.type]===item.id;
+};
+E.equippedClub=function(type){return D.item(st().bag[type]);};
+E.equippedBall=function(){return D.item(st().bag.ball);};
+
+/* ---------- chests ---------- */
+E.openChestContents=function(type){
+  var c=D.CHESTS[type], out={coins:0,gems:0,cards:[]};
+  out.coins=Math.round(U.rnd(c.coins[0],c.coins[1]));
+  out.gems=Math.round(U.rnd(c.gems[0],c.gems[1]));
+  // 2-3 card stacks of random owned-eligible items
+  var stacks=2+(Math.random()<0.5?1:0);
+  var pool=D.CLUBS.concat(D.BALLS);
+  for(var i=0;i<stacks;i++){
+    var r=Math.random(), rar="common";
+    if(r<c.leg)rar="legendary"; else if(r<c.leg+c.epic)rar="epic"; else if(r<c.leg+c.epic+c.rare)rar="rare";
+    var choices=pool.filter(function(it){return it.rarity===rar;});
+    if(!choices.length)choices=pool.filter(function(it){return it.rarity==="common";});
+    var it=choices[Math.floor(Math.random()*choices.length)];
+    var qty=Math.round(U.rnd(c.cards[0],c.cards[1])/stacks);
+    out.cards.push({id:it.id,kind:it.kind,qty:Math.max(1,qty),rarity:it.rarity,name:it.name});
+  }
+  return out;
+};
+E.applyRewards=function(r){
+  if(r.coins)E.addCoins(r.coins);
+  if(r.gems)E.addGems(r.gems);
+  (r.cards||[]).forEach(function(cd){
+    var rec=E.inv(cd.kind,cd.id); rec.cards+=cd.qty;
+    // commons auto-unlock once enough cards
+    var item=D.item(cd.id);
+    if(!rec.owned && item.rarity==="common" && rec.cards>=D.cardsForNext(item,1)){
+      rec.cards-=D.cardsForNext(item,1); rec.owned=true; rec.level=1;
+    }
+  });
+  commit();
+};
+E.grantChest=function(type){ if(st().chests.length<4){st().chests.push({type:type});commit();return true;} return false; };
+E.openChestSlot=function(i){
+  var ch=st().chests[i]; if(!ch)return null;
+  var loot=E.openChestContents(ch.type);
+  st().chests.splice(i,1);
+  E.applyRewards(loot); commit();
+  return loot;
+};
+
+/* free chest every 30 min */
+E.FREE_MS=30*60*1000;
+E.freeChestReady=function(){return Date.now()>=(st().freeChestAt||0);};
+E.freeChestMsLeft=function(){return Math.max(0,(st().freeChestAt||0)-Date.now());};
+E.claimFreeChest=function(){
+  if(!E.freeChestReady())return null;
+  var loot=E.openChestContents("wood");
+  E.applyRewards(loot);
+  st().freeChestAt=Date.now()+E.FREE_MS; commit();
+  return loot;
+};
+
+/* ---------- match settlement ---------- */
+E.settleMatch=function(res){
+  var s=st(), tour=res.tour;
+  var sum={win:res.win,tie:res.tie,coins:0,gems:0,xp:0,chest:null};
+  s.stats.matches++;
+  // stake already deducted on entry
+  if(res.win){
+    sum.coins=tour.reward; sum.gems=tour.gemReward;
+    sum.xp=40+tour.levelReq*8;
+    s.stats.wins++; s.stats.streak++; if(s.stats.streak>s.stats.bestStreak)s.stats.bestStreak=s.stats.streak;
+    var ct = tour.ai>=0.75?"gold":tour.ai>=0.55?"silver":"wood";
+    sum.chest=ct; E.grantChest(ct);
+    var tr=s.tours[tour.id]; tr.plays++; tr.wins++;
+    if(tr.best===null||res.playerTotal<tr.best)tr.best=res.playerTotal;
+  } else if(res.tie){
+    sum.coins=Math.round(tour.entry); // refund stake
+    sum.xp=20;
+    s.stats.streak=0;
+    s.tours[tour.id].plays++;
+  } else {
+    sum.xp=15; s.stats.streak=0; s.tours[tour.id].plays++;
+  }
+  // hole achievement xp
+  sum.xp+=res.birdies*6+res.eagles*15+res.hio*40;
+  s.stats.birdies+=res.birdies; s.stats.eagles+=res.eagles; s.stats.hio+=res.hio;
+  if(sum.coins)E.addCoins(sum.coins);
+  if(sum.gems)E.addGems(sum.gems);
+  E.addXp(sum.xp);
+  commit();
+  return sum;
+};
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.phys — shot-flight simulation (pure)
+   World coords: x = lateral yards, y = yards from tee. Forward defined by aim.
+===================================================================== */
+(function(){
+var U=G.util;
+var P=G.phys={};
+
+// loft (apex height factor of carry) by club type
+var LOFT={Driver:0.16,Wood:0.18,Iron:0.22,Wedge:0.30,Putter:0.0};
+// roll factor by lie (multiplier on base roll)
+var LIE_ROLL={tee:1,fairway:1,rough:0.5,sand:0.25,green:0.5};
+var LIE_POWER={tee:1,fairway:1,rough:0.86,sand:0.74,green:1};
+
+/* Resolve a full swing.
+   opts: { from:{x,y}, aim:radians (0 = straight up the hole, + = right),
+           power:0..~1.05, accError:-1..1 (0 perfect),
+           club:effective, ball:effective, lie, wind:{dir(rad),spd(mph)}, putt:bool } */
+P.resolve=function(o){
+  var club=o.club, ball=o.ball;
+  var powerStat=club.powerF+ (ball?ball.power:0);
+  var accStat  =club.accF + (ball?ball.accuracy:0);
+  var spinStat =club.spinF + (ball?ball.spin:0);
+  var ctrlStat =club.ctrlF + (ball?ball.control:0);
+
+  // ----- distance ----- (club.dist already encodes the power stat + level)
+  var baseDist=club.dist; // base carry at full power
+  var liePow=LIE_POWER[o.lie]||1;
+  var carry=baseDist*o.power*liePow;
+
+  // accuracy: better accuracy -> errors hurt less. window scaled by accStat.
+  var accForgive=U.clamp(1-(accStat/16),0.35,0.95); // 0..1 multiplier on error
+  var effErr=o.accError*accForgive;
+
+  // side deviation grows with distance & shrinks with control
+  var ctrlF=U.clamp(1-(ctrlStat/22),0.45,1);
+  var sideYds=effErr*carry*0.16*ctrlF;
+  // distance loss on big mishits
+  carry*= (1-Math.min(0.22,Math.abs(effErr)*0.22));
+
+  // ----- direction vectors -----
+  var a=o.aim;
+  var dir={x:Math.sin(a), y:Math.cos(a)};
+  var perp={x:Math.cos(a), y:-Math.sin(a)};
+
+  // ----- wind displacement over flight (less for putts / high control) -----
+  var windYds = o.putt?0 : (o.wind.spd*0.10) * (carry/220) * U.clamp(1.1-ctrlStat/24,0.3,1);
+  var wdir={x:Math.sin(o.wind.dir), y:Math.cos(o.wind.dir)};
+
+  // landing (carry end, before roll)
+  var land={
+    x:o.from.x + dir.x*carry + perp.x*sideYds + wdir.x*windYds,
+    y:o.from.y + dir.y*carry + perp.y*sideYds + wdir.y*windYds
+  };
+
+  // ----- roll -----
+  var spinStop=U.clamp(spinStat/12,0.1,1); // more spin -> less roll
+  var lieRoll=LIE_ROLL[o.lie]!=null?LIE_ROLL[o.lie]:1;
+  var rollDist=o.putt?0:carry*0.12*(1-spinStop)*lieRoll*2;
+  var rest={x:land.x+dir.x*rollDist, y:land.y+dir.y*rollDist};
+
+  // ----- apex (for render) -----
+  var apex=carry*(LOFT[o.clubType]||0.2)*(0.8+0.4*(1-o.power));
+  if(o.putt)apex=0;
+
+  // build a flight path (carry arc + roll) for rendering
+  var path=[], N=26;
+  for(var i=0;i<=N;i++){
+    var t=i/N;
+    path.push({
+      x:U.lerp(o.from.x,land.x,t),
+      y:U.lerp(o.from.y,land.y,t),
+      h:apex*Math.sin(Math.PI*t)
+    });
+  }
+  var RN=8;
+  for(var j=1;j<=RN;j++){
+    var rt=j/RN;
+    path.push({x:U.lerp(land.x,rest.x,rt),y:U.lerp(land.y,rest.y,rt),h:0,roll:true});
+  }
+
+  return {land:land, rest:rest, apex:apex, path:path, carry:carry, sideYds:sideYds};
+};
+
+/* simple putt resolve: roll toward aim with distance from power */
+P.putt=function(o){
+  // reuse resolve with putt flag
+  return P.resolve(Object.assign({},o,{putt:true,clubType:"Putter"}));
+};
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.render — canvas drawing
+===================================================================== */
+(function(){
+var U=G.util;
+var R=G.render={};
+var cv, ctx, W=0, H=0, DPR=1;
+
+R.init=function(canvas){
+  cv=canvas; ctx=cv.getContext("2d");
+  R.resize();
+};
+R.resize=function(){
+  if(!cv)return;
+  DPR=Math.min(window.devicePixelRatio||1,2.5);
+  W=cv.clientWidth; H=cv.clientHeight;
+  cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+};
+
+// camera in world units
+var cam={x:0,y:0,scale:3,_x:0,_y:0,_s:3};
+R.setCamera=function(x,y,scale){cam.x=x;cam.y=y;cam.scale=scale;};
+R.easeCamera=function(x,y,scale,k){
+  k=k||0.12;
+  cam._x+=(x-cam._x)*k; cam._y+=(y-cam._y)*k; cam._s+=(scale-cam._s)*k;
+};
+R.snapCamera=function(x,y,scale){cam._x=x;cam._y=y;cam._s=scale;};
+
+// world -> screen (ball sits around 70% down screen, looking up the hole)
+function S(wx,wy){
+  return {x:W/2+(wx-cam._x)*cam._s, y:H*0.66-(wy-cam._y)*cam._s};
+}
+R.s2 = S;
+R.camScale=function(){return cam._s;};
+
+function roundRect(x,y,w,h,r){ctx.beginPath();ctx.moveTo(x+r,y);ctx.arcTo(x+w,y,x+w,y+h,r);
+  ctx.arcTo(x+w,y+h,x,y+h,r);ctx.arcTo(x,y+h,x,y,r);ctx.arcTo(x,y,x+w,y,r);ctx.closePath();}
+
+var tEnv=0;
+R.tick=function(dt){tEnv+=dt;};
+
+/* draw the whole hole.
+   ctxState: {hole, pal, ballWorld, ballH, aimAngle, aimPower(0..1 preview), trail, particles, flagBend, putting} */
+R.draw=function(s){
+  var hole=s.hole, pal=s.pal;
+  ctx.clearRect(0,0,W,H);
+
+  // ---- sky ----
+  var sky=ctx.createLinearGradient(0,0,0,H*0.5);
+  sky.addColorStop(0,pal.sky1); sky.addColorStop(1,pal.sky2);
+  ctx.fillStyle=sky; ctx.fillRect(0,0,W,H);
+
+  // ---- terrain base (rough fills everything below horizon) ----
+  // compute horizon as screen-y of a far point up the hole
+  var far=S(centerX(hole,1.4),hole.len*1.4);
+  var horizon=U.clamp(far.y,0,H*0.62);
+  var rough=ctx.createLinearGradient(0,horizon,0,H);
+  rough.addColorStop(0,pal.rough); rough.addColorStop(1,pal.rough2);
+  ctx.fillStyle=rough; ctx.fillRect(0,horizon,W,H-horizon);
+
+  // distant hills silhouette
+  ctx.fillStyle="rgba(0,0,0,.10)";
+  ctx.beginPath();ctx.moveTo(0,horizon);
+  for(var hx=0;hx<=W;hx+=W/6){ctx.lineTo(hx,horizon-12-10*Math.sin(hx*0.01+2));}
+  ctx.lineTo(W,horizon);ctx.closePath();ctx.fill();
+
+  // ---- fairway band along centreline ----
+  drawFairway(hole,pal);
+
+  // ---- hazards ----
+  (hole.hazards||[]).forEach(function(hz){drawHazard(hole,hz,pal);});
+
+  // ---- green ----
+  drawGreen(hole,pal);
+
+  // ---- trees ----
+  (hole.trees||[]).forEach(function(tr){drawTree(hole,tr,pal);});
+
+  // ---- aim preview line ----
+  if(s.aimAngle!=null && !s.hideAim){ drawAim(s); }
+
+  // ---- flight trail ----
+  if(s.trail&&s.trail.length>1){
+    ctx.strokeStyle="rgba(255,255,255,.5)";ctx.lineWidth=2;ctx.beginPath();
+    for(var i=0;i<s.trail.length;i++){
+      var p=S(s.trail[i].x,s.trail[i].y); var hy=p.y-s.trail[i].h*cam._s*0.55;
+      if(i===0)ctx.moveTo(p.x,hy);else ctx.lineTo(p.x,hy);
+    }
+    ctx.stroke();
+  }
+
+  // ---- pin / flag ----
+  drawFlag(hole,pal,s.flagBend||0);
+
+  // ---- ball ----
+  if(s.ballWorld) drawBall(s.ballWorld,s.ballH||0);
+
+  // ---- particles ----
+  if(s.particles) drawParticles(s.particles);
+
+  // ---- wind streaks (subtle) ----
+  drawWindStreaks(s);
+};
+
+function centerX(hole,yfrac){
+  // lateral centre offset at fraction of len, from bend list + pin pull near green
+  var x=0;
+  (hole.bend||[]).forEach(function(b){
+    // smooth bump toward bend point
+    var w=Math.exp(-Math.pow((yfrac-b.y)/0.32,2));
+    x+=b.x*w;
+  });
+  // pull toward pin near the end
+  var pull=U.clamp((yfrac-0.7)/0.3,0,1);
+  x=U.lerp(x,hole.pin.x,pull*0.7);
+  return x;
+}
+R.centerX=centerX;
+
+function bandPoly(hole,halfWidthYds){
+  var pts=[],N=24,i,yf,cx;
+  for(i=0;i<=N;i++){yf=i/N;cx=centerX(hole,yf);var p=S(cx-halfWidthYds,yf*hole.len);pts.push(p);}
+  for(i=N;i>=0;i--){yf=i/N;cx=centerX(hole,yf);var q=S(cx+halfWidthYds,yf*hole.len);pts.push(q);}
+  return pts;
+}
+function fillPoly(pts){ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+  for(var i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.closePath();ctx.fill();}
+
+function drawFairway(hole,pal){
+  var pts=bandPoly(hole,hole.fw);
+  var g=ctx.createLinearGradient(0,H*0.2,0,H);
+  g.addColorStop(0,pal.fairwayD);g.addColorStop(1,pal.fairway);
+  ctx.fillStyle=g; fillPoly(pts);
+  // mow stripes
+  ctx.save();
+  ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+  for(var i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);ctx.closePath();ctx.clip();
+  ctx.globalAlpha=0.10;
+  for(var s=0;s<14;s++){
+    var yf=s/14, y0=S(0,yf*hole.len).y, y1=S(0,(yf+1/14)*hole.len).y;
+    ctx.fillStyle= s%2? "#ffffff":"#000000";
+    ctx.fillRect(0,Math.min(y0,y1),W,Math.abs(y1-y0));
+  }
+  ctx.restore();
+}
+
+function drawHazard(hole,hz,pal){
+  var c=S(hz.x, hz.y*hole.len);
+  var rx=hz.r*cam._s, ry=hz.r*cam._s*0.7;
+  if(hz.type==="water"){
+    ctx.save();
+    var g=ctx.createRadialGradient(c.x,c.y,2,c.x,c.y,rx);
+    g.addColorStop(0,"#bfeaff");g.addColorStop(.3,pal.water);g.addColorStop(1,"#0d4f73");
+    ctx.fillStyle=g;ellipse(c.x,c.y,rx,ry);ctx.fill();
+    // shimmer
+    ctx.globalAlpha=.5;ctx.strokeStyle="rgba(255,255,255,.7)";ctx.lineWidth=1.5;
+    for(var k=0;k<3;k++){
+      var yy=c.y-ry*0.4+k*ry*0.4;
+      ctx.beginPath();
+      for(var xx=-rx;xx<rx;xx+=6){
+        var ph=Math.sin((xx*0.12)+tEnv*2+k);
+        ctx.lineTo(c.x+xx, yy+ph*2);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  } else { // sand
+    ctx.fillStyle=pal.sand;ellipse(c.x,c.y,rx,ry);ctx.fill();
+    ctx.fillStyle="rgba(0,0,0,.08)";ellipse(c.x,c.y+ry*0.25,rx*0.8,ry*0.5);ctx.fill();
+    ctx.strokeStyle="rgba(0,0,0,.12)";ctx.lineWidth=1;ellipse(c.x,c.y,rx,ry);ctx.stroke();
+  }
+}
+
+function drawGreen(hole,pal){
+  var c=S(hole.pin.x,hole.len);
+  var rx=hole.greenR*cam._s, ry=hole.greenR*cam._s*0.72;
+  // shadow ring
+  ctx.fillStyle="rgba(0,0,0,.12)";ellipse(c.x,c.y+4,rx*1.04,ry*1.04);ctx.fill();
+  var g=ctx.createRadialGradient(c.x,c.y-ry*0.3,2,c.x,c.y,rx);
+  g.addColorStop(0,"#a7ef9f");g.addColorStop(1,pal.green);
+  ctx.fillStyle=g;ellipse(c.x,c.y,rx,ry);ctx.fill();
+}
+
+function drawTree(hole,tr,pal){
+  var c=S(tr.x,tr.y*hole.len);
+  var sc=cam._s;
+  if(c.y<-40||c.y>H+40)return;
+  // shadow
+  ctx.fillStyle="rgba(0,0,0,.18)";ellipse(c.x+4*sc/3,c.y+1*sc,5*sc,2.4*sc);ctx.fill();
+  // trunk
+  ctx.fillStyle="#6b4a2b";ctx.fillRect(c.x-1.1*sc,c.y-4*sc,2.2*sc,5*sc);
+  // canopy
+  var g=ctx.createRadialGradient(c.x-1.5*sc,c.y-8*sc,1,c.x,c.y-6*sc,6*sc);
+  g.addColorStop(0,"#5fbf6a");g.addColorStop(1,pal.tree);
+  ctx.fillStyle=g;
+  ellipse(c.x,c.y-6.5*sc,5*sc,5.5*sc);ctx.fill();
+  ellipse(c.x-3*sc,c.y-4.5*sc,3*sc,3.2*sc);ctx.fill();
+  ellipse(c.x+3*sc,c.y-4.5*sc,3*sc,3.2*sc);ctx.fill();
+}
+
+function drawFlag(hole,pal,bend){
+  var c=S(hole.pin.x,hole.len);
+  var sc=cam._s, ph=11*sc; // pole height px
+  // cup
+  ctx.fillStyle="rgba(0,0,0,.45)";ellipse(c.x,c.y,2.2*sc,1.3*sc);ctx.fill();
+  // pole
+  ctx.strokeStyle="#eee";ctx.lineWidth=Math.max(1.5,0.5*sc);
+  ctx.beginPath();ctx.moveTo(c.x,c.y);ctx.lineTo(c.x,c.y-ph);ctx.stroke();
+  // flag
+  var fw=7*sc, fh=4*sc, sway=Math.sin(tEnv*3)*1.5+bend;
+  ctx.fillStyle="#ff5252";
+  ctx.beginPath();ctx.moveTo(c.x,c.y-ph);
+  ctx.quadraticCurveTo(c.x+fw*0.5,c.y-ph+fh*0.2+sway, c.x+fw,c.y-ph+fh*0.5+sway);
+  ctx.quadraticCurveTo(c.x+fw*0.5,c.y-ph+fh*0.8+sway, c.x,c.y-ph+fh);
+  ctx.closePath();ctx.fill();
+}
+
+function drawAim(s){
+  var hole=s.hole, b=s.ballWorld;
+  var a=s.aimAngle;
+  var len=s.aimLen||120;
+  var dir={x:Math.sin(a),y:Math.cos(a)};
+  // dotted aim line
+  ctx.save();ctx.setLineDash([6,7]);ctx.strokeStyle="rgba(255,255,255,.7)";ctx.lineWidth=2;
+  var p0=S(b.x,b.y), p1=S(b.x+dir.x*len,b.y+dir.y*len);
+  ctx.beginPath();ctx.moveTo(p0.x,p0.y);ctx.lineTo(p1.x,p1.y);ctx.stroke();
+  ctx.restore();
+  // landing reticle (preview at current power)
+  if(s.previewDist){
+    var pd=s.previewDist;
+    var lp=S(b.x+dir.x*pd, b.y+dir.y*pd);
+    ctx.strokeStyle="rgba(255,255,255,.85)";ctx.lineWidth=2;
+    ctx.beginPath();ctx.arc(lp.x,lp.y,7,0,7);ctx.stroke();
+    ctx.beginPath();ctx.arc(lp.x,lp.y,2.5,0,7);ctx.fillStyle="#fff";ctx.fill();
+  }
+}
+
+function drawBall(b,h){
+  var p=S(b.x,b.y);
+  var sc=cam._s;
+  var hpx=h*sc*0.55;
+  // ground shadow (stays on ground, shrinks with height)
+  var shA=U.clamp(1-h/40,0.25,1);
+  ctx.fillStyle="rgba(0,0,0,"+(0.32*shA)+")";
+  ellipse(p.x,p.y, 3*sc*shA, 1.6*sc*shA);ctx.fill();
+  // ball (lifted by height, scaled up slightly)
+  var by=p.y-hpx;
+  var r=Math.max(3.2, (2.2+h*0.03)*sc);
+  var g=ctx.createRadialGradient(p.x-r*0.35,by-r*0.35,1,p.x,by,r);
+  g.addColorStop(0,"#ffffff");g.addColorStop(1,"#cfd6d0");
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(p.x,by,r,0,7);ctx.fill();
+  ctx.strokeStyle="rgba(0,0,0,.15)";ctx.lineWidth=1;ctx.stroke();
+}
+
+function drawParticles(ps){
+  for(var i=0;i<ps.length;i++){
+    var pt=ps[i]; var p=S(pt.x,pt.y);
+    ctx.globalAlpha=U.clamp(pt.life,0,1);
+    ctx.fillStyle=pt.color;
+    ctx.beginPath();ctx.arc(p.x,p.y-pt.h*cam._s*0.5,pt.r,0,7);ctx.fill();
+  }
+  ctx.globalAlpha=1;
+}
+
+function drawWindStreaks(s){
+  if(!s.wind)return;
+  ctx.save();ctx.globalAlpha=0.12;ctx.strokeStyle="#fff";ctx.lineWidth=1.5;
+  var a=s.wind.dir;var dx=Math.sin(a),dy=Math.cos(a);
+  for(var i=0;i<6;i++){
+    var x=(i*W/6 + (tEnv*40*dx)%W +W)%W;
+    var y=(i*53 + (tEnv*40*-dy)%H +H)%H *0.5+H*0.1;
+    ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(x+dx*22,y-dy*22);ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function ellipse(x,y,rx,ry){ctx.beginPath();ctx.ellipse(x,y,Math.abs(rx),Math.abs(ry),0,0,7);}
+
+R.dims=function(){return {W:W,H:H};};
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.round — in-round controller, swing meter, AI opponent
+===================================================================== */
+(function(){
+var U=G.util, D=G.DATA, P=G.phys, R=G.render, E=G.eco;
+var Rd=G.round={};
+
+var el={}; // dom refs filled on init
+var canvas;
+var raf=null, lastT=0;
+
+var M=null; // match state
+
+Rd.init=function(){
+  canvas=document.getElementById("gc");
+  R.init(canvas);
+  el.hole=document.getElementById("gHole");
+  el.par=document.getElementById("gPar");
+  el.dist=document.getElementById("gDist");
+  el.score=document.getElementById("gScore");
+  el.windArrow=document.getElementById("gWindArrow");
+  el.windSpd=document.getElementById("gWindSpd");
+  el.clubStrip=document.getElementById("gClubStrip");
+  el.swing=document.getElementById("gSwing");
+  el.meter=document.getElementById("gMeter");
+  el.meterFill=document.getElementById("gMeterFill");
+  el.marker=document.getElementById("gMarker");
+  el.perfect=document.getElementById("gPerfect");
+  el.perfBand=document.getElementById("gPerfBand");
+  el.meterLabel=document.getElementById("gMeterLabel");
+  el.aimHint=document.getElementById("gAimHint");
+  el.tap=document.getElementById("gTapCatch");
+  el.result=document.getElementById("gResult");
+  el.resultCard=document.getElementById("gResultCard");
+
+  window.addEventListener("resize",function(){R.resize();});
+  bindInput();
+  el.swing.addEventListener("click",startSwing);
+  document.getElementById("gQuit").addEventListener("click",function(){
+    if(confirm("Quit match? Your stake is forfeit.")) endMatchEarly();
+  });
+};
+
+/* ---------------- match lifecycle ---------------- */
+Rd.startMatch=function(tourId){
+  var tour=D.tour(tourId);
+  // entry already validated by UI; deduct stake
+  E.spendCoins(tour.entry);
+  M={
+    tour:tour, holes:tour.holes, idx:0,
+    playerScores:[], aiScores:[],
+    birdies:0,eagles:0,hio:0,
+    ball:{x:0,y:0}, lie:"tee", strokes:0, holeNum:0,
+    wind:{dir:0,spd:0}, club:null, putting:false,
+    trail:null, particles:[], anim:null, flightT:0, flightPath:null,
+    phase:"aim", aimAngle:0, swingStage:null, marker:0, markerDir:1, power:0, perfect:0
+  };
+  G.ui.show("game");
+  R.resize();
+  loadHole(0);
+  loop();
+};
+
+function endMatchEarly(){
+  stopLoop();
+  G.ui.show("home"); G.ui.refresh();
+}
+
+function loadHole(i){
+  M.idx=i; M.holeNum=i+1;
+  var hole=M.holes[i];
+  M.hole=hole;
+  M.ball={x:hole.tee.x, y:0};
+  M.lie="tee"; M.strokes=0; M.putting=false;
+  M.aimAngle=Math.atan2(hole.pin.x-hole.tee.x, hole.len); // aim at pin
+  M.wind={dir:U.rnd(-Math.PI,Math.PI), spd:Math.round(U.rnd(hole.wind.min,hole.wind.max))};
+  M.trail=null; M.flightPath=null; M.particles=[];
+  M.phase="aim";
+  // AI plays this hole (hidden) -> a score
+  M.aiHoleScore=aiPlayHole(hole, M.tour.ai);
+  pickBestClub();
+  // camera snap to a framing
+  frameHole(true);
+  updateHUD();
+  buildClubStrip();
+  showAimUI();
+}
+
+/* ---------------- AI opponent ---------------- */
+function aiPlayHole(hole,skill){
+  // expected strokes around par, modulated by skill (0..1)
+  var mean = hole.par + (1-skill)*1.4 - 0.5;       // skilled AI ~ par or under
+  var sd   = 0.7 + (1-skill)*0.9;
+  var s=Math.round(U.gauss(mean,sd));
+  s=U.clamp(s, Math.max(2,hole.par-2), hole.par+4);
+  return s;
+}
+
+/* ---------------- club selection ---------------- */
+function distToPin(){
+  var dx=M.hole.pin.x-M.ball.x, dy=M.hole.len-M.ball.y;
+  return Math.sqrt(dx*dx+dy*dy);
+}
+function onGreen(){
+  return distToPin()<=M.hole.greenR;
+}
+function pickBestClub(){
+  var d=distToPin();
+  if(onGreen()){ M.club=E.equippedClub("Putter"); M.putting=true; return; }
+  M.putting=false;
+  // choose club whose effective full carry is closest but >= dist, else longest
+  var types=["Driver","Wood","Iron","Wedge"], best=null,bestGap=1e9;
+  types.forEach(function(t){
+    var c=E.equippedClub(t); if(!c)return;
+    var rec=E.inv("club",c.id); var eff=D.clubEffective(c,rec.level);
+    var carry=eff.dist;
+    var gap=carry>=d? carry-d : (d-carry)*2.2; // prefer not over-clubbing massively
+    if(gap<bestGap){bestGap=gap;best=c;}
+  });
+  M.club=best||E.equippedClub("Iron");
+}
+function buildClubStrip(){
+  el.clubStrip.innerHTML="";
+  var types= M.putting? ["Putter"] : ["Driver","Wood","Iron","Wedge"];
+  types.forEach(function(t){
+    var c=E.equippedClub(t); if(!c)return;
+    var rec=E.inv("club",c.id); var eff=D.clubEffective(c,rec.level);
+    var b=document.createElement("button");
+    b.className="clubbtn"+(M.club&&M.club.id===c.id?" sel":"");
+    b.innerHTML="<div>"+t+"</div><small>"+eff.dist+"y</small>";
+    b.onclick=function(){ if(M.phase!=="aim")return; M.club=c; buildClubStrip(); updateHUD(); };
+    el.clubStrip.appendChild(b);
+  });
+}
+
+/* ---------------- aim + swing input ---------------- */
+function bindInput(){
+  var dragging=false, lastX=0;
+  function down(e){
+    if(M.phase!=="aim")return;
+    dragging=true; lastX=px(e);
+  }
+  function move(e){
+    if(!dragging||M.phase!=="aim")return;
+    var x=px(e), dx=x-lastX; lastX=x;
+    M.aimAngle=U.clamp(M.aimAngle - dx*0.004, -0.8, 0.8);
+    e.preventDefault();
+  }
+  function up(){dragging=false;}
+  canvas.addEventListener("touchstart",down,{passive:false});
+  canvas.addEventListener("touchmove",move,{passive:false});
+  canvas.addEventListener("touchend",up);
+  canvas.addEventListener("mousedown",down);
+  window.addEventListener("mousemove",move);
+  window.addEventListener("mouseup",up);
+  // tap catcher for the swing meter timing
+  el.tap.addEventListener("touchstart",function(e){e.preventDefault();swingTap();},{passive:false});
+  el.tap.addEventListener("mousedown",function(e){e.preventDefault();swingTap();});
+}
+function px(e){return (e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX);}
+
+function showAimUI(){
+  el.swing.style.display="block";
+  el.meter.classList.remove("show");
+  el.tap.classList.remove("arm");
+  el.aimHint.style.display="block";
+  el.clubStrip.style.display="flex";
+}
+function hideAimUI(){
+  el.swing.style.display="none";
+  el.aimHint.style.display="none";
+}
+
+function startSwing(){
+  if(M.phase!=="aim")return;
+  M.phase="swing"; M.swingStage="power";
+  M.marker=0; M.markerDir=1; M.power=0; M.perfect=0;
+  hideAimUI();
+  el.clubStrip.style.display="none";
+  el.meter.classList.add("show");
+  el.tap.classList.add("arm");
+  el.perfect.style.display="none";
+  el.perfBand.style.display="none";
+  el.meterLabel.textContent="PWR";
+}
+
+function swingTap(){
+  if(M.phase!=="swing")return;
+  if(M.swingStage==="power"){
+    M.power=U.clamp(M.marker,0.05,1.05);
+    M.perfect=M.marker;
+    M.swingStage="accuracy";
+    el.meterLabel.textContent="ACC";
+    // show perfect line + forgiving band sized by club accuracy
+    var rec=E.inv("club",M.club.id); var eff=D.clubEffective(M.club,rec.level);
+    var ballEff=ballEffective();
+    var acc=eff.accF+(ballEff?ballEff.accuracy:0);
+    var bandFrac=U.clamp(0.04+acc/170,0.05,0.16); // visual forgiveness
+    M.bandFrac=bandFrac;
+    placeMeterLine(el.perfect,M.perfect);
+    el.perfect.style.display="block";
+    el.perfBand.style.display="block";
+    el.perfBand.style.height=(bandFrac*100*2)+"%"; // band spans +-band
+    el.perfBand.style.bottom=((M.perfect-bandFrac)*100)+"%";
+  } else if(M.swingStage==="accuracy"){
+    var err=(M.marker-M.perfect); // signed timing error in meter units
+    // normalise by band so within band ~ near perfect
+    var accError=U.clamp(err/0.5,-1,1);
+    fireShot(accError);
+  }
+}
+
+function placeMeterLine(node,frac){ node.style.bottom=(U.clamp(frac,0,1)*100)+"%"; }
+
+/* ---------------- firing the shot ---------------- */
+function ballEffective(){
+  var b=E.equippedBall(); if(!b)return null;
+  var rec=E.inv("ball",b.id); return D.ballEffective(b,rec.level);
+}
+function lieAt(x,y){
+  // hazards first
+  var hz=M.hole.hazards||[];
+  for(var i=0;i<hz.length;i++){
+    var hx=hz[i].x, hy=hz[i].y*M.hole.len, dx=x-hx,dy=y-hy;
+    if(dx*dx+dy*dy<=hz[i].r*hz[i].r) return hz[i].type==="water"?"water":"sand";
+  }
+  // green
+  var pdx=x-M.hole.pin.x, pdy=y-M.hole.len;
+  if(pdx*pdx+pdy*pdy<=M.hole.greenR*M.hole.greenR) return "green";
+  if(y<0 || y>M.hole.len+30) return "oob";
+  // fairway vs rough vs oob by lateral distance from centreline
+  var cx=R.centerX(M.hole, U.clamp(y/M.hole.len,0,1));
+  var off=Math.abs(x-cx);
+  if(off<=M.hole.fw) return "fairway";
+  if(off<=M.hole.w) return "rough";
+  return "oob";
+}
+
+function fireShot(accError){
+  M.phase="flight";
+  el.meter.classList.remove("show");
+  el.tap.classList.remove("arm");
+  M.strokes++;
+  var rec=E.inv("club",M.club.id); var eff=D.clubEffective(M.club,rec.level);
+  var prevBall={x:M.ball.x,y:M.ball.y}, prevLie=M.lie;
+
+  var res=P.resolve({
+    from:{x:M.ball.x,y:M.ball.y}, aim:M.aimAngle, power:M.power, accError:accError,
+    club:eff, ball:ballEffective(), clubType:M.club.type, lie:M.lie,
+    wind:M.wind, putt:M.putting
+  });
+
+  // animate along path
+  M.flightPath=res.path; M.flightT=0; M.trail=[];
+  M._prevBall=prevBall; M._res=res;
+  M.swingStage=null;
+
+  // duration depends on carry
+  M.flightDur = M.putting? U.clamp(res.carry/40,0.5,1.4) : U.clamp(0.6+res.carry/260,0.7,1.9);
+}
+
+function resolveLanding(){
+  var rest=M._res.rest;
+  // determine final lie; account for crossing into hazards at landing
+  var lie=lieAt(rest.x,rest.y);
+  var holed=false;
+  // putt hole-out check
+  var dx=rest.x-M.hole.pin.x, dy=rest.y-M.hole.len;
+  var dPin=Math.sqrt(dx*dx+dy*dy);
+  if(dPin<=1.6 && (M.putting || M.power<0.7)) { holed=true; }
+
+  if(holed){ holeComplete(); return; }
+
+  if(lie==="water"||lie==="oob"){
+    G.ui.toast(lie==="water"?"💦 Splash! +1 penalty":"⛔ Out of bounds! +1 penalty");
+    M.strokes++; // penalty
+    // drop back near previous position
+    M.ball={x:M._prevBall.x,y:M._prevBall.y};
+    M.lie= M.strokes>1? lieAt(M.ball.x,M.ball.y):"tee";
+    burst(M.ball,lie==="water"?"#bfeaff":"#caa");
+  } else {
+    M.ball={x:rest.x,y:rest.y};
+    M.lie=lie;
+    burst(M.ball, lie==="sand"?"#efdca7":"#ffffff");
+  }
+  M.trail=null; M.flightPath=null;
+  M.putting=onGreen();
+  pickClubKeepIfManual();
+  M.aimAngle=Math.atan2(M.hole.pin.x-M.ball.x, M.hole.len-M.ball.y);
+  M.phase="aim";
+  frameHole(false);
+  updateHUD(); buildClubStrip(); showAimUI();
+  el.clubStrip.style.display="flex";
+}
+function pickClubKeepIfManual(){
+  if(M.putting){M.club=E.equippedClub("Putter");return;}
+  pickBestClub();
+}
+
+function holeComplete(){
+  var hole=M.hole, par=hole.par, sc=M.strokes;
+  M.playerScores[M.idx]=sc; M.aiScores[M.idx]=M.aiHoleScore;
+  var rel=sc-par, label;
+  if(sc===1){label="HOLE IN ONE!";M.hio++;}
+  else if(rel<=-3){label="ALBATROSS!";M.eagles++;}
+  else if(rel===-2){label="EAGLE!";M.eagles++;}
+  else if(rel===-1){label="BIRDIE";M.birdies++;}
+  else if(rel===0){label="PAR";}
+  else if(rel===1){label="BOGEY";}
+  else if(rel===2){label="DOUBLE BOGEY";}
+  else {label="+"+rel;}
+  burst(M.ball,"#ffce4f");
+  M.phase="resolve";
+  showHoleResult(label,sc,par);
+}
+
+/* ---------------- result overlays ---------------- */
+function showHoleResult(label,sc,par){
+  var aiSc=M.aiHoleScore;
+  var pTot=sum(M.playerScores), aTot=sum(M.aiScores,M.idx+1);
+  var last=M.idx>=M.holes.length-1;
+  var card=el.resultCard;
+  card.innerHTML=
+    '<h2>'+label+'</h2>'+
+    '<div class="sub">Hole '+M.holeNum+' · Par '+par+'</div>'+
+    '<div class="rewards"><div class="r">You <b style="color:var(--good)">'+sc+'</b></div>'+
+    '<div class="r" style="color:var(--muted)">AI <b>'+aiSc+'</b></div></div>'+
+    '<div class="sub">Match total — You '+pTot+' · AI '+aTot+'</div>'+
+    '<button class="btn wide gold" id="nextHoleBtn" style="margin-top:16px">'+(last?'SEE RESULT':'NEXT HOLE')+'</button>';
+  el.result.classList.add("show");
+  document.getElementById("nextHoleBtn").onclick=function(){
+    el.result.classList.remove("show");
+    if(last) finishMatch();
+    else { loadHole(M.idx+1); }
+  };
+}
+
+function finishMatch(){
+  stopLoop();
+  var pTot=sum(M.playerScores), aTot=sum(M.aiScores);
+  var win=pTot<aTot, tie=pTot===aTot;
+  var res={
+    win:win, tie:tie, tour:M.tour, playerTotal:pTot, aiTotal:aTot,
+    birdies:M.birdies, eagles:M.eagles, hio:M.hio
+  };
+  var sum2=E.settleMatch(res);
+  showMatchResult(res,sum2);
+}
+
+function showMatchResult(res,s){
+  var rows="";
+  for(var i=0;i<M.holes.length;i++){
+    rows+='<tr><td>'+(i+1)+'</td><td>'+M.holes[i].par+'</td>'+
+      '<td class="me"><b>'+M.playerScores[i]+'</b></td><td>'+M.aiScores[i]+'</td></tr>';
+  }
+  rows+='<tr><td><b>Σ</b></td><td><b>'+sumPar()+'</b></td>'+
+    '<td class="me"><b>'+res.playerTotal+'</b></td><td><b>'+res.aiTotal+'</b></td></tr>';
+  var title=res.win?"🏆 YOU WIN!":res.tie?"🤝 TIE":"💀 DEFEAT";
+  var sub=res.win?"Stake doubled + chest!":res.tie?"Stake refunded.":"Better luck next round.";
+  var rew='';
+  if(s.coins)rew+='<div class="r"><span class="dot coin"></span>+'+s.coins+'</div>';
+  if(s.gems)rew+='<div class="r"><span class="dot gem"></span>+'+s.gems+'</div>';
+  rew+='<div class="r">✨ +'+s.xp+' XP</div>';
+  var chest=s.chest?'<div class="sub" style="margin-top:8px">'+D.CHESTS[s.chest].icon+' Won a '+D.CHESTS[s.chest].name+'!</div>':'';
+  el.resultCard.innerHTML=
+    '<h2>'+title+'</h2><div class="sub">'+sub+'</div>'+
+    '<div class="scorecard"><table><tr><th>Hole</th><th>Par</th><th>You</th><th>AI</th></tr>'+rows+'</table></div>'+
+    '<div class="rewards">'+rew+'</div>'+chest+
+    '<button class="btn wide gold" id="matchDoneBtn" style="margin-top:14px">CLUBHOUSE</button>';
+  el.result.classList.add("show");
+  document.getElementById("matchDoneBtn").onclick=function(){
+    el.result.classList.remove("show");
+    G.ui.show("home"); G.ui.refresh();
+    if(G._levelUp){var lv=G._levelUp;G._levelUp=null;G.ui.toast("⬆️ Level "+lv+"!");}
+  };
+}
+
+function sum(arr,n){var t=0,m=(n==null?arr.length:n);for(var i=0;i<m;i++)t+=arr[i]||0;return t;}
+function sumPar(){var t=0;for(var i=0;i<M.holes.length;i++)t+=M.holes[i].par;return t;}
+
+/* ---------------- particles ---------------- */
+function burst(at,color){
+  for(var i=0;i<14;i++){
+    M.particles.push({x:at.x,y:at.y,h:0,vx:U.rnd(-1,1),vy:U.rnd(-1,1),vh:U.rnd(0.5,3),
+      r:U.rnd(1.5,3.5),color:color,life:1});
+  }
+}
+
+/* ---------------- camera framing ---------------- */
+function frameHole(snap){
+  var d=distToPin();
+  var view=U.clamp(d*1.25+30, 70, 360);
+  var dims=R.dims();
+  var scale=(dims.H*0.78)/view;
+  // look from ball toward pin: centre between ball and a point ahead
+  var dir={x:Math.sin(M.aimAngle),y:Math.cos(M.aimAngle)};
+  var cx=M.ball.x+dir.x*view*0.32;
+  var cy=M.ball.y+dir.y*view*0.32;
+  if(snap) R.snapCamera(cx,cy,scale); else R.easeCamera(cx,cy,scale,1);
+  M._camTarget={x:cx,y:cy,s:scale};
+}
+
+/* ---------------- HUD ---------------- */
+function updateHUD(){
+  el.hole.textContent=M.holeNum+"/"+M.holes.length;
+  el.par.textContent=M.hole.par;
+  el.dist.textContent=Math.round(distToPin())+"y";
+  var rel=sum(M.playerScores)-partialPar();
+  el.score.textContent= rel===0?"E":(rel>0?"+"+rel:rel);
+  // wind: arrow points in wind dir; angle relative to up-hole
+  var deg=M.wind.dir*180/Math.PI;
+  el.windArrow.style.transform="rotate("+deg+"deg)";
+  el.windSpd.textContent=M.wind.spd;
+}
+function partialPar(){var t=0;for(var i=0;i<M.playerScores.length;i++)t+=M.holes[i].par;return t;}
+
+/* ---------------- main loop ---------------- */
+function loop(){
+  raf=requestAnimationFrame(loop);
+  var now=performance.now(); var dt=Math.min(0.05,(now-lastT)/1000)||0.016; lastT=now;
+  R.tick(dt);
+  update(dt);
+  render();
+}
+function stopLoop(){ if(raf)cancelAnimationFrame(raf); raf=null; }
+
+function update(dt){
+  if(!M)return;
+  // swing meter marker
+  if(M.phase==="swing"){
+    var spd=1.35; // sweeps per second-ish
+    M.marker+=M.markerDir*spd*dt;
+    if(M.swingStage==="power"){
+      if(M.marker>=1.05){M.marker=1.05;M.markerDir=-1;}
+      if(M.marker<=0){M.marker=0;M.markerDir=1;}
+    } else { // accuracy: bounce, and auto-miss if it returns to bottom
+      if(M.marker>=1.05){M.marker=1.05;M.markerDir=-1;}
+      if(M.marker<=0){ swingAutoMiss(); }
+    }
+    el.meterFill.style.height=(U.clamp(M.marker,0,1)*100)+"%";
+    el.marker.style.bottom=(U.clamp(M.marker,0,1)*100)+"%";
+  }
+  // flight animation
+  if(M.phase==="flight"&&M.flightPath){
+    M.flightT+=dt/M.flightDur;
+    var t=U.clamp(M.flightT,0,1);
+    var idx=Math.min(M.flightPath.length-1, Math.floor(t*(M.flightPath.length-1)));
+    var p=M.flightPath[idx];
+    M.ball={x:p.x,y:p.y}; M.ballH=p.h;
+    M.trail.push({x:p.x,y:p.y,h:p.h}); if(M.trail.length>18)M.trail.shift();
+    // camera follow ball
+    var dims=R.dims();
+    R.easeCamera(p.x, p.y+8, Math.max(M._camTarget?M._camTarget.s*0.85:3, (dims.H*0.5)/U.clamp(M._res.carry*0.9,60,320)),0.1);
+    if(M.flightT>=1){ M.ballH=0; resolveLanding(); }
+  }
+  // ease camera in aim
+  if(M.phase==="aim"&&M._camTarget){
+    R.easeCamera(M._camTarget.x,M._camTarget.y,M._camTarget.s,0.12);
+    // live preview distance from current selected club (full carry estimate)
+  }
+  // particles
+  if(M.particles&&M.particles.length){
+    for(var i=M.particles.length-1;i>=0;i--){
+      var pt=M.particles[i];
+      pt.x+=pt.vx*dt*6; pt.y+=pt.vy*dt*6; pt.h+=pt.vh*dt*6; pt.vh-=12*dt; pt.life-=dt*1.4;
+      if(pt.life<=0||pt.h<0)M.particles.splice(i,1);
+    }
+  }
+}
+
+function swingAutoMiss(){
+  // returned to bottom without tap -> worst accuracy
+  M.marker=0;
+  fireShot(M.markerDir<0? 1 : -1);
+}
+
+function render(){
+  if(!M)return;
+  var prevDist=null;
+  if(M.phase==="aim"&&M.club){
+    var rec=E.inv("club",M.club.id); var eff=D.clubEffective(M.club,rec.level);
+    prevDist=M.putting? Math.min(distToPin(),eff.dist) : eff.dist;
+  }
+  R.draw({
+    hole:M.hole, pal:M.tour.palette,
+    ballWorld:M.ball, ballH:M.ballH||0,
+    aimAngle:(M.phase==="aim")?M.aimAngle:null,
+    aimLen:U.clamp(distToPin(),30,260),
+    previewDist:prevDist,
+    trail:M.trail, particles:M.particles,
+    wind:M.wind, hideAim:(M.phase!=="aim")
+  });
+}
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.ui — menu screens + routing
+===================================================================== */
+(function(){
+var D=G.DATA, E=G.eco, U=G.util;
+var ui=G.ui={};
+var current="boot", bagTab="clubs", itemCtx=null, itemReturn="bag";
+
+ui.show=function(name){
+  document.querySelectorAll(".screen").forEach(function(s){s.classList.remove("active");});
+  var s=document.getElementById("screen-"+name); if(s)s.classList.add("active");
+  current=name;
+  // tell native shell the scene (for hardware back button)
+  try{ if(window.AndroidApp&&AndroidApp.onScene) AndroidApp.onScene(name); }catch(e){}
+  if(name==="home")renderHome();
+  if(name==="tours")renderTours();
+  if(name==="bag")renderBag();
+  if(name==="shop")renderShop();
+};
+ui.refresh=function(){ paintWallet(); if(current==="home")renderHome(); };
+
+function paintWallet(){
+  var c=U.fmt(G.state.coins), g=U.fmt(G.state.gems);
+  document.getElementById("wCoins").textContent=c;
+  document.getElementById("wGems").textContent=g;
+  document.querySelectorAll(".wCoins").forEach(function(n){n.textContent=c;});
+  document.querySelectorAll(".wGems").forEach(function(n){n.textContent=g;});
+}
+
+/* ---------- home ---------- */
+function renderHome(){
+  paintWallet();
+  var s=G.state;
+  document.getElementById("hName").textContent=s.name;
+  document.getElementById("hLevel").textContent=s.level;
+  var xp=E.xpProgress();
+  document.getElementById("hXp").textContent=xp.have+"/"+xp.need+" XP";
+  document.getElementById("hXpFill").style.width=(xp.frac*100)+"%";
+  // free chest
+  var sub=document.getElementById("freeChestSub"), btn=document.getElementById("freeChestBtn");
+  if(E.freeChestReady()){ sub.textContent="Ready to open!"; btn.disabled=false; btn.textContent="OPEN"; }
+  else { var ms=E.freeChestMsLeft(); var mins=Math.ceil(ms/60000);
+    sub.textContent="Next in "+mins+" min"; btn.disabled=true; btn.textContent="WAIT"; }
+}
+
+/* ---------- tours ---------- */
+function renderTours(){
+  paintWallet();
+  var list=document.getElementById("tourList"); list.innerHTML="";
+  D.TOURS.forEach(function(t){
+    var tr=G.state.tours[t.id]||{unlocked:false,plays:0,wins:0,best:null};
+    var locked=!tr.unlocked || G.state.level<t.levelReq;
+    var card=document.createElement("div");
+    card.className="tour-card"+(locked?" locked":"");
+    card.setAttribute("data-req",t.levelReq);
+    var pal=t.palette;
+    var holes=t.holes.length, par=t.holes.reduce(function(a,h){return a+h.par;},0);
+    card.innerHTML=
+      '<div class="banner" style="background:linear-gradient(120deg,'+pal.fairwayD+','+pal.rough2+')">'+
+        '<h3>'+t.name+'</h3></div>'+
+      '<div class="body">'+
+        '<div class="meta"><span>⛳ <b>'+holes+'</b> holes</span><span>Par <b>'+par+'</b></span>'+
+        '<span>🤖 AI <b>'+Math.round(t.ai*100)+'%</b></span>'+
+        (tr.best!=null?'<span>Best <b>'+tr.best+'</b></span>':'')+'</div>'+
+        '<div style="display:flex;align-items:center;gap:10px">'+
+          '<div class="stake">Stake <span class="dot coin"></span><b>'+t.entry+'</b></div>'+
+          '<div class="spacer" style="flex:1"></div>'+
+          '<div class="stake" style="color:var(--good)">Win <span class="dot coin"></span><b>'+t.reward+'</b></div>'+
+        '</div>'+
+        '<button class="btn wide '+(locked?'alt':'gold')+'" style="margin-top:12px" '+(locked?'disabled':'')+'>'+
+          (locked?'🔒 Reach Level '+t.levelReq:'PLAY · '+t.entry+' coins')+'</button>'+
+      '</div>';
+    if(!locked){
+      card.querySelector("button").onclick=function(){
+        if(G.state.coins<t.entry){ui.toast("Not enough coins for the stake.");return;}
+        G.round.startMatch(t.id);
+      };
+    }
+    list.appendChild(card);
+  });
+}
+
+/* ---------- bag ---------- */
+document.addEventListener("click",function(e){
+  var nav=e.target.closest("[data-nav]"); if(nav){ui.show(nav.getAttribute("data-nav"));}
+  var bt=e.target.closest("[data-bagtab]"); if(bt){bagTab=bt.getAttribute("data-bagtab");
+    document.querySelectorAll("[data-bagtab]").forEach(function(n){n.classList.toggle("active",n===bt);});
+    renderBag();}
+});
+
+function renderBag(){
+  paintWallet();
+  var grid=document.getElementById("bagGrid"); grid.innerHTML="";
+  var items= bagTab==="balls"? D.BALLS : D.CLUBS;
+  items.forEach(function(it){
+    var rec=E.inv(it.kind,it.id);
+    var rar=D.RARITIES[it.rarity];
+    var card=document.createElement("button");
+    card.className="card"+(rec.owned?"":" dim");
+    var eff= it.kind==="ball"?D.ballEffective(it,rec.level||1):D.clubEffective(it,rec.level||1);
+    var icon= it.kind==="ball"? "⚪" : D.CLUB_ICON[it.type];
+    var need=D.cardsForNext(it,rec.level||1);
+    card.innerHTML=
+      '<div class="rar" style="background:'+rar.color+'"></div>'+
+      (E.isEquipped(it)?'<div class="eq">● EQUIPPED</div>':'')+
+      '<div class="ic">'+icon+'</div>'+
+      '<div class="nm">'+it.name+'</div>'+
+      '<div class="ty">'+(it.kind==="ball"?"Ball":it.type)+' · '+rar.name+'</div>'+
+      (rec.owned? '<div class="lv">LVL '+rec.level+(it.kind==="ball"?"":" · "+eff.dist+"y")+'</div>'
+                : '<div class="cardbar"><i style="width:'+U.clamp(rec.cards/need*100,0,100)+'%"></i></div>'+
+                  '<div class="ty" style="margin-top:4px">'+rec.cards+'/'+need+' cards</div>');
+    card.onclick=function(){ openItem(it,"bag"); };
+    grid.appendChild(card);
+  });
+}
+
+/* ---------- item detail ---------- */
+function openItem(it,ret){
+  itemCtx=it; itemReturn=ret||"bag";
+  ui.show("item"); renderItem();
+}
+document.getElementById("itemBack").onclick=function(){ui.show(itemReturn);};
+
+function statRow(lab,val){
+  return '<div class="stat"><div class="lab">'+lab+'</div>'+
+    '<div class="track"><i style="width:'+(val*10)+'%"></i></div>'+
+    '<div class="val">'+Math.round(val)+'</div></div>';
+}
+function renderItem(){
+  paintWallet();
+  var it=itemCtx, rec=E.inv(it.kind,it.id), rar=D.RARITIES[it.rarity];
+  var lvl=rec.level||1;
+  var eff= it.kind==="ball"? D.ballEffective(it,lvl) : D.clubEffective(it,lvl);
+  var icon= it.kind==="ball"?"⚪":D.CLUB_ICON[it.type];
+  var body=document.getElementById("itemBody");
+  var stats= it.kind==="ball"
+    ? statRow("Power",eff.power*3)+statRow("Accuracy",eff.accuracy*3)+statRow("Spin",eff.spin*3)+statRow("Control",eff.control*3)
+    : statRow("Power",eff.powerF)+statRow("Accuracy",eff.accF)+statRow("Spin",eff.spinF)+statRow("Control",eff.ctrlF);
+  var maxed=lvl>=D.maxLevel(it);
+  var need=D.cardsForNext(it,lvl), coin=D.coinForNext(it,lvl);
+  var html=
+    '<div class="detail">'+
+      '<div class="bigico">'+icon+'</div>'+
+      '<h3>'+it.name+'</h3>'+
+      '<div class="rtag" style="background:'+rar.color+';color:#05231a">'+rar.name+(it.kind==="ball"?" Ball":" "+it.type)+'</div>'+
+      (it.kind==="ball"?'':'<div class="muted" style="margin-top:8px">Carry <b style="color:var(--txt)">'+eff.dist+' yds</b></div>')+
+      '<div class="stats">'+stats+'</div>';
+
+  if(rec.owned){
+    html+='<div class="muted" style="margin-bottom:10px">Level '+lvl+(maxed?' · MAX':' / '+D.maxLevel(it))+'</div>';
+    if(!maxed){
+      html+='<div class="card cardbar" style="background:rgba(0,0,0,.3);height:8px;margin-bottom:6px"><i style="display:block;height:100%;width:'+U.clamp(rec.cards/need*100,0,100)+'%;background:linear-gradient(90deg,var(--rare),#bff0ff)"></i></div>'+
+        '<div class="muted" style="font-size:12px;margin-bottom:12px">'+rec.cards+'/'+need+' cards · '+U.fmt(coin)+' coins to upgrade</div>';
+    }
+    html+='<div class="upg">';
+    if(!maxed) html+='<button class="btn gold" id="upBtn" '+(E.canUpgrade(it)?'':'disabled')+'>UPGRADE</button>';
+    html+='<button class="btn '+(E.isEquipped(it)?'alt':'')+'" id="eqBtn" '+(E.isEquipped(it)?'disabled':'')+'>'+(E.isEquipped(it)?'EQUIPPED':'EQUIP')+'</button>';
+    html+='</div>';
+  } else {
+    // not owned: card-unlock or buy
+    var canCardUnlock=rec.cards>=D.cardsForNext(it,1);
+    html+='<div class="muted" style="margin-bottom:10px">'+rec.cards+'/'+D.cardsForNext(it,1)+' cards to unlock</div>';
+    html+='<div class="upg">';
+    if(canCardUnlock){
+      html+='<button class="btn gold" id="unlockBtn">UNLOCK FREE</button>';
+    } else if(it.gem){
+      html+='<button class="btn gem" id="buyBtn" '+(G.state.gems>=it.gem?'':'disabled')+'>BUY · '+it.gem+' 💎</button>';
+    } else if(it.price>0){
+      html+='<button class="btn gold" id="buyBtn" '+(G.state.coins>=it.price?'':'disabled')+'>BUY · '+U.fmt(it.price)+' 🪙</button>';
+    } else {
+      html+='<button class="btn alt" disabled>Collect cards from chests</button>';
+    }
+    html+='</div>';
+  }
+  html+='</div>';
+  body.innerHTML=html;
+
+  var up=document.getElementById("upBtn"); if(up)up.onclick=function(){ if(E.upgrade(it)){ui.toast("⬆️ Upgraded to Lvl "+E.inv(it.kind,it.id).level);renderItem();} };
+  var eq=document.getElementById("eqBtn"); if(eq)eq.onclick=function(){ E.equip(it); ui.toast("Equipped "+it.name); renderItem(); };
+  var ul=document.getElementById("unlockBtn"); if(ul)ul.onclick=function(){ if(E.unlock(it)){ui.toast("🔓 Unlocked "+it.name+"!");renderItem();} };
+  var by=document.getElementById("buyBtn"); if(by)by.onclick=function(){ if(E.buy(it)){ui.toast("✅ Bought "+it.name+"!");renderItem();paintWallet();} else ui.toast("Can't afford that."); };
+}
+
+/* ---------- shop ---------- */
+function renderShop(){
+  paintWallet();
+  var body=document.getElementById("shopBody");
+  // chests
+  var chestHtml='<div class="shop-sec"><h2>Chests</h2><div class="chest-row">';
+  ["silver","gold"].forEach(function(type){
+    var c=D.CHESTS[type], price=D.CHEST_PRICE[type];
+    chestHtml+='<div class="chest"><div class="cico">'+c.icon+'</div><div class="cn">'+c.name+'</div>'+
+      '<div class="cd">Cards, coins &amp; gems</div>'+
+      '<button class="btn gem wide" data-buychest="'+type+'" '+(G.state.gems>=price?'':'disabled')+'>'+price+' 💎</button></div>';
+  });
+  chestHtml+='</div></div>';
+
+  // featured gear (a few notable buyable items)
+  function gearCard(it){
+    var rec=E.inv(it.kind,it.id), rar=D.RARITIES[it.rarity];
+    var owned=rec.owned;
+    var icon=it.kind==="ball"?"⚪":D.CLUB_ICON[it.type];
+    var priceBtn= owned?'<button class="btn alt wide" disabled>OWNED</button>'
+      : it.gem? '<button class="btn gem wide" data-buy="'+it.id+'" '+(G.state.gems>=it.gem?'':'disabled')+'>'+it.gem+' 💎</button>'
+      : '<button class="btn gold wide" data-buy="'+it.id+'" '+(G.state.coins>=it.price?'':'disabled')+'>'+U.fmt(it.price)+' 🪙</button>';
+    return '<div class="card"><div class="rar" style="background:'+rar.color+'"></div>'+
+      '<div class="ic">'+icon+'</div><div class="nm">'+it.name+'</div>'+
+      '<div class="ty">'+(it.kind==="ball"?"Ball":it.type)+' · '+rar.name+'</div>'+
+      '<div style="margin-top:8px">'+priceBtn+'</div></div>';
+  }
+  var feat=["drv_titan","irn_razor","wed_spin","drv_apex","irn_blade","wed_pitch","bal_tour","bal_pro","drv_zenith","bal_elite"];
+  var gearHtml='<div class="shop-sec"><h2>Featured Gear</h2><div class="grid">';
+  feat.forEach(function(id){gearHtml+=gearCard(D.item(id));});
+  gearHtml+='</div></div>';
+
+  body.innerHTML=chestHtml+gearHtml;
+
+  body.querySelectorAll("[data-buychest]").forEach(function(b){
+    b.onclick=function(){
+      var type=b.getAttribute("data-buychest"), price=D.CHEST_PRICE[type];
+      if(!E.spendGems(price)){ui.toast("Not enough gems.");return;}
+      var loot=E.openChestContents(type); E.applyRewards(loot);
+      showChestOpen(type,loot); paintWallet();
+    };
+  });
+  body.querySelectorAll("[data-buy]").forEach(function(b){
+    b.onclick=function(){
+      var it=D.item(b.getAttribute("data-buy"));
+      if(E.buy(it)){ui.toast("✅ Bought "+it.name+"!");renderShop();paintWallet();}
+      else ui.toast("Can't afford that.");
+    };
+  });
+}
+
+/* ---------- chest opening animation ---------- */
+function showChestOpen(type,loot){
+  var pop=document.getElementById("rewardPop");
+  var c=D.CHESTS[type];
+  var items='';
+  if(loot.coins)items+=lootItem("🪙",loot.coins,"coins");
+  if(loot.gems)items+=lootItem("💎",loot.gems,"gems");
+  loot.cards.forEach(function(cd){
+    var it=D.item(cd.id); var icon=it.kind==="ball"?"⚪":D.CLUB_ICON[it.type];
+    items+=lootItem(icon,"x"+cd.qty,cd.name);
+  });
+  pop.innerHTML='<div class="chest-open"><div class="big">'+c.icon+'</div>'+
+    '<h2 style="margin-top:6px">'+c.name+'</h2>'+
+    '<div class="loot" id="lootRow" style="display:none">'+items+'</div>'+
+    '<button class="btn gold" id="chestTap" style="margin-top:16px">TAP TO OPEN</button></div>';
+  pop.classList.add("show");
+  document.getElementById("chestTap").onclick=function(){
+    var row=document.getElementById("lootRow"); row.style.display="flex";
+    var lis=row.querySelectorAll(".li"); lis.forEach(function(n,i){n.style.animationDelay=(i*0.09)+"s";});
+    var t=document.getElementById("chestTap"); t.textContent="COLLECT";
+    t.onclick=function(){ pop.classList.remove("show"); ui.refresh(); };
+  };
+}
+function lootItem(emoji,qty,label){
+  return '<div class="li"><div class="e">'+emoji+'</div><div class="q">'+qty+'</div><small>'+label+'</small></div>';
+}
+
+ui.toast=function(msg){
+  var t=document.getElementById("toast"); t.textContent=msg; t.classList.add("show");
+  clearTimeout(ui._tt); ui._tt=setTimeout(function(){t.classList.remove("show");},1900);
+};
+
+// free chest button
+document.getElementById("freeChestBtn").onclick=function(){
+  var loot=E.claimFreeChest(); if(!loot)return;
+  showChestOpen("wood",loot); renderHome();
+};
+})();
+</script>
+
+<script>
+/* =====================================================================
+   GAME.main — boot
+===================================================================== */
+(function(){
+  G.save.load();
+
+  // hardware back button hook (native shell calls window.__goHome)
+  window.__goHome=function(){
+    var active=document.querySelector(".screen.active");
+    var id=active?active.id.replace("screen-",""):"home";
+    if(id==="game"){ /* ignore — must quit via button */ return; }
+    if(id==="item"){ G.ui.show("bag"); return; }
+    if(id!=="home"&&id!=="boot"){ G.ui.show("home"); return; }
+  };
+
+  // boot progress
+  var fill=document.getElementById("bootFill"), start=document.getElementById("bootStart");
+  var p=0;
+  var iv=setInterval(function(){
+    p+=Math.random()*22+8; if(p>=100){p=100;clearInterval(iv);start.style.display="inline-block";}
+    fill.style.width=p+"%";
+  },120);
+
+  function begin(){
+    G.round.init();
+    G.ui.show("home");
+  }
+  start.addEventListener("click",begin);
+
+  // refresh home timers every 20s while on home
+  setInterval(function(){
+    var a=document.querySelector(".screen.active");
+    if(a&&a.id==="screen-home"){ G.ui.refresh(); }
+  },20000);
+})();
+</script>
+</body>
+</html>

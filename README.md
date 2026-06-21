@@ -1,3 +1,16 @@
+# S-Games
+
+A small collection of self-contained, fully-offline games. Each game is a single
+HTML file at the repo root, wrapped in a minimal Android `WebView` so it can ship
+as a tiny APK built by GitHub Actions.
+
+| Game | File | App project | Build workflow | Docs |
+|------|------|-------------|----------------|------|
+| 🦄 Unicorn Magic | `unicorn-magic.html` | `android/` | `android.yml` | below |
+| ⛳ Clutch Golf | `clutch-golf.html` | `android-golf/` | `android-golf.yml` | [CLUTCH_GOLF.md](CLUTCH_GOLF.md) |
+
+---
+
 # 🦄 Unicorn Magic
 
 A gentle, colourful learning game for a 3-year-old who loves unicorns — **no
